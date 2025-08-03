@@ -6,39 +6,39 @@ import (
 
 // Response represents the standard API response structure
 type Response struct {
-	Status     string      `json:"status"`
-	Message    string      `json:"message"`
-	StatusCode int         `json:"status_code"`
-	Data       interface{} `json:"data"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+	Data    any    `json:"data"`
 }
 
 // SuccessResponse creates a success response with the given data
-func SuccessResponse(data interface{}) Response {
+func SuccessResponse(data any) Response {
 	return Response{
-		Status:     "success",
-		Message:    "success",
-		StatusCode: http.StatusOK,
-		Data:       data,
+		Status:  "success",
+		Message: "success",
+		Code:    http.StatusOK,
+		Data:    data,
 	}
 }
 
 // SuccessResponseWithMessage creates a success response with custom message and data
 func SuccessResponseWithMessage(message string, data interface{}) Response {
 	return Response{
-		Status:     "success",
-		Message:    message,
-		StatusCode: http.StatusOK,
-		Data:       data,
+		Status:  "success",
+		Message: message,
+		Code:    http.StatusOK,
+		Data:    data,
 	}
 }
 
 // ErrorResponse creates an error response with the given code and message
 func ErrorResponse(code int, message string) Response {
 	return Response{
-		Status:     "error",
-		Message:    message,
-		StatusCode: code,
-		Data:       nil,
+		Status:  "error",
+		Message: message,
+		Code:    code,
+		Data:    nil,
 	}
 }
 
