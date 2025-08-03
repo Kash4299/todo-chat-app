@@ -18,16 +18,17 @@ A Go-based REST API for managing todo items with support for Redis caching and K
 
 ```bash
 # Server Configuration
-SERVER_HOST=localhost
-SERVER_PORT=8080
+PORT=8080
+APP_ENV=local
 
-# Database Configuration
+# Database
 DB_HOST=localhost
 DB_PORT=5432
+DB_DATABASE=postgres
 DB_USERNAME=postgres
-DB_PASSWORD=password
+DB_PASSWORD=123456
+DB_SCHEMA=public
 DB_NAME=postgres
-DB_SSLMODE=disable
 ```
 
 ### Redis Configuration
