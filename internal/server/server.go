@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"todo/internal/config"
-	"todo/internal/handlers/todo"
 	"todo/internal/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -22,29 +21,26 @@ type Server struct {
 	server *http.Server
 }
 
-// NewServer creates a new server instance with all dependencies
 func NewServer(
 	config *config.Config,
 	logger *zap.Logger,
-	todoHandler *todo.TodoHandler,
+	handlers Handlers,
 ) *Server {
-	// Set Gin mode based on environment
 	if config.Server.Host == "localhost" {
 		gin.SetMode(gin.DebugMode)
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// Create Gin engine
 	engine := gin.New()
 
 	// Add middleware
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.CORSWithDefaults())
+	engine.Use(gin.Recovery())
 	engine.Use(loggerMiddleware(logger))
 
-	// Setup routes using the router
-	router := NewRouter(engine, todoHandler)
+	router := NewRouter(engine, handlers)
 	router.SetupRoutes()
 
 	// Create HTTP server
@@ -63,8 +59,6 @@ func NewServer(
 		server: server,
 	}
 }
-
-
 
 // loggerMiddleware adds request logging to all routes
 func loggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
