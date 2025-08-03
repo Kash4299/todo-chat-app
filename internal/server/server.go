@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"todo/common"
 	"todo/internal/config"
 	"todo/internal/handlers/todo"
 	"todo/internal/middleware"
@@ -44,8 +43,9 @@ func NewServer(
 	engine.Use(middleware.CORSWithDefaults())
 	engine.Use(loggerMiddleware(logger))
 
-	// Setup routes
-	setupRoutes(engine, todoHandler)
+	// Setup routes using the router
+	router := NewRouter(engine, todoHandler)
+	router.SetupRoutes()
 
 	// Create HTTP server
 	server := &http.Server{
@@ -64,36 +64,7 @@ func NewServer(
 	}
 }
 
-// setupRoutes configures all the routes for the application
-func setupRoutes(engine *gin.Engine, todoHandler *todo.TodoHandler) {
-	// Health check endpoint
-	engine.GET("/health", func(c *gin.Context) {
-		response := common.SuccessResponseWithMessage("Server is running", gin.H{
-			"time": time.Now().UTC(),
-		})
-		c.JSON(http.StatusOK, response)
-	})
 
-	// API v1 routes
-	v1 := engine.Group("/api/v1")
-	{
-		// Todo routes
-		todos := v1.Group("/todos")
-		{
-			todos.GET("", todoHandler.GetAll)
-			todos.GET("/:id", todoHandler.GetByID)
-			todos.POST("", todoHandler.Create)
-			todos.PUT("/:id", todoHandler.Update)
-			todos.DELETE("/:id", todoHandler.Delete)
-		}
-	}
-
-	// 404 handler
-	engine.NoRoute(func(c *gin.Context) {
-		response := common.NotFoundResponse("The requested resource was not found")
-		c.JSON(http.StatusNotFound, response)
-	})
-}
 
 // loggerMiddleware adds request logging to all routes
 func loggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
