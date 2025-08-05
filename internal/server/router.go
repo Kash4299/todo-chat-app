@@ -50,6 +50,14 @@ func (r *Router) setupTodoRoutes(v1 *gin.RouterGroup) {
 		todos.PUT("/:id", r.handlers.TodoHandler.Update)
 		todos.DELETE("/:id", r.handlers.TodoHandler.Delete)
 	}
+
+	users := v1.Group("/users")
+	{
+		// users.GET("/:id", r.handlers.TodoHandler.GetByID)
+		users.POST("", r.handlers.UserHandler.CreateUser)
+		// users.PUT("/:id", r.handlers.TodoHandler.Update)
+		// users.DELETE("/:id", r.handlers.TodoHandler.Delete)
+	}
 }
 
 // notFoundHandler handles 404 responses

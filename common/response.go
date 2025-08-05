@@ -23,7 +23,7 @@ func SuccessResponse(data any) Response {
 }
 
 // SuccessResponseWithMessage creates a success response with custom message and data
-func SuccessResponseWithMessage(message string, data interface{}) Response {
+func SuccessResponseWithMessage(message string, data any) Response {
 	return Response{
 		Status:  "success",
 		Message: message,

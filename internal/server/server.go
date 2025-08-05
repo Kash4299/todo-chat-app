@@ -37,7 +37,6 @@ func NewServer(
 	// Add middleware
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.CORSWithDefaults())
-	engine.Use(gin.Recovery())
 	engine.Use(loggerMiddleware(logger))
 
 	router := NewRouter(engine, handlers)
