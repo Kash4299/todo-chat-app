@@ -37,3 +37,24 @@ func (s *UserService) CreateUser(ctx context.Context, request *request.CreateUse
 
 	return nil
 }
+
+func (s *UserService) UserLogin(ctx context.Context, request *request.UserLoginRequest) error {
+	// get user by username
+	user, err := s.Hub.UserRepository.GetUserByUsername(ctx, request.Username)
+	if err != nil {
+		return err
+	}
+
+	compare, err := common.ComparePasswordAndHash(request.Password, user.Password)
+	if err != nil {
+		return err
+	}
+
+	if !compare {
+		return fmt.Errorf("wrong password : %s", request.Password)
+	}
+
+	//TODO : jwt token
+
+	return nil
+}

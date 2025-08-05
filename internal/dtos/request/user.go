@@ -5,3 +5,8 @@ type CreateUserRequest struct {
 	Password string `query:"password" json:"password"`
 	Email    string `query:"email" json:"email"`
 }
+
+type UserLoginRequest struct {
+	Username string `query:"username" json:"username"`
+	Password string `query:"password" json:"password"`
+}

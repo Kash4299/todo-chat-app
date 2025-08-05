@@ -57,6 +57,7 @@ func (r *Router) setupTodoRoutes(v1 *gin.RouterGroup) {
 		users.POST("", r.handlers.UserHandler.CreateUser)
 		// users.PUT("/:id", r.handlers.TodoHandler.Update)
 		// users.DELETE("/:id", r.handlers.TodoHandler.Delete)
+		users.POST("/login", r.handlers.UserHandler.Login)
 	}
 }
 

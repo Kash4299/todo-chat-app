@@ -32,3 +32,26 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 	response := common.SuccessResponseWithMessage("User created successfully", "")
 	c.JSON(http.StatusCreated, response)
 }
+
+func (h *UserHandler) Login(c *gin.Context) {
+	var (
+		req = new(request.UserLoginRequest)
+		ctx = c.Request.Context()
+	)
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response := common.BadRequestResponse("Invalid request body")
+		c.JSON(http.StatusBadRequest, response)
+		return
+	}
+
+	err := h.service.UserLogin(ctx, req)
+	if err != nil {
+		response := common.InternalServerErrorResponse(err.Error())
+		c.JSON(http.StatusInternalServerError, response)
+		return
+	}
+
+	response := common.SuccessResponseWithMessage("Login successfully", "")
+	c.JSON(http.StatusCreated, response)
+}
