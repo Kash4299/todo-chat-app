@@ -45,16 +45,16 @@ func (r *Router) setupTodoRoutes(v1 *gin.RouterGroup) {
 	todos := v1.Group("/todos")
 	{
 		todos.GET("", r.handlers.TodoHandler.GetAll)
-		todos.GET("/:id", r.handlers.TodoHandler.GetByID)
 		todos.POST("", r.handlers.TodoHandler.Create)
-		todos.PUT("/:id", r.handlers.TodoHandler.Update)
-		todos.DELETE("/:id", r.handlers.TodoHandler.Delete)
+		// todos.GET("/:id", r.handlers.TodoHandler.GetByID)
+		// todos.PUT("/:id", r.handlers.TodoHandler.Update)
+		// todos.DELETE("/:id", r.handlers.TodoHandler.Delete)
 	}
 
 	users := v1.Group("/users")
 	{
-		// users.GET("/:id", r.handlers.TodoHandler.GetByID)
 		users.POST("", r.handlers.UserHandler.CreateUser)
+		// users.GET("/:id", r.handlers.TodoHandler.GetByID)
 		// users.PUT("/:id", r.handlers.TodoHandler.Update)
 		// users.DELETE("/:id", r.handlers.TodoHandler.Delete)
 		users.POST("/login", r.handlers.UserHandler.Login)
