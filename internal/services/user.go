@@ -38,23 +38,26 @@ func (s *UserService) CreateUser(ctx context.Context, request *request.CreateUse
 	return nil
 }
 
-func (s *UserService) UserLogin(ctx context.Context, request *request.UserLoginRequest) error {
+func (s *UserService) UserLogin(ctx context.Context, request *request.UserLoginRequest) (string, error) {
 	// get user by username
 	user, err := s.Hub.UserRepository.GetUserByUsername(ctx, request.Username)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	compare, err := common.ComparePasswordAndHash(request.Password, user.Password)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if !compare {
-		return fmt.Errorf("wrong password : %s", request.Password)
+		return "", fmt.Errorf("wrong password : %s", request.Password)
 	}
 
-	//TODO : jwt token
+	token, err := common.SignToken(user.ID.String(), user.Username, user.Email)
+	if err != nil {
+		return "", fmt.Errorf("fail to signed token : %v", err)
+	}
 
-	return nil
+	return token, nil
 }

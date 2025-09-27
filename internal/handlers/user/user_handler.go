@@ -45,13 +45,14 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	err := h.service.UserLogin(ctx, req)
+	token, err := h.service.UserLogin(ctx, req)
 	if err != nil {
 		response := common.InternalServerErrorResponse(err.Error())
 		c.JSON(http.StatusInternalServerError, response)
 		return
 	}
 
-	response := common.SuccessResponseWithMessage("Login successfully", "")
+	response := common.SuccessResponseWithMessage("Login successfully", token)
+	c.SetCookie("Bearer", token, 30, "/", "localhost", true, true)
 	c.JSON(http.StatusCreated, response)
 }
