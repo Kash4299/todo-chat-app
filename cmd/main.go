@@ -35,6 +35,7 @@ func main() {
 		repositories.Module,
 		services.Module,
 		handlers.Module,
+		server.HandlersModule,
 		redis.Module,
 		kafka.Module,
 		fx.Provide(server.NewServer),

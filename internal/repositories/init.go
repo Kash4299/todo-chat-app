@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"todo/internal/repositories/todo"
+	"todo/internal/repositories/user"
 
 	"go.uber.org/fx"
 )
@@ -10,5 +11,6 @@ import (
 var Module = fx.Options(
 	fx.Provide(
 		todo.NewTodoRepository,
+		user.NewUserRepository,
 	),
 )

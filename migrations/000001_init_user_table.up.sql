@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     email varchar(255),
     created_at timestamp with time zone default current_timestamp,
     updated_at timestamp with time zone default current_timestamp,
+    deleted_At timestamp with time zone,
     CONSTRAINT unique_username UNIQUE (username),
     CONSTRAINT unique_email UNIQUE (email)
 );

@@ -9,5 +9,6 @@ var Module = fx.Options(
 	fx.Provide(
 		NewHub,
 		NewTodoService,
+		NewUserService,
 	),
 )
