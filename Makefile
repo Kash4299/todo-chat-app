@@ -43,7 +43,14 @@ docker-down:
 # Test the application
 test:
 	@echo "Testing..."
-	@go test ./... -v
+	@go test ./internal/services/... ./internal/grpc/... -v -count=1
+
+# Test with coverage report
+test-cover:
+	@echo "Running tests with coverage..."
+	@go test ./internal/services/... ./internal/grpc/... -v -coverprofile=coverage.out
+	@go tool cover -func=coverage.out
+	@echo "To view HTML report: go tool cover -html=coverage.out"
 # Integrations Tests for the application
 itest:
 	@echo "Running integration tests..."
@@ -71,4 +78,12 @@ watch:
             fi; \
         fi
 
-.PHONY: all build run test clean watch docker-run docker-down itest
+# Generate Go code from proto files
+proto-gen:
+	@echo "Generating protobuf code..."
+	@protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		proto/*.proto
+	@echo "Protobuf code generated successfully"
+
+.PHONY: all build run test clean watch docker-run docker-down itest proto-gen

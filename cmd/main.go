@@ -8,6 +8,7 @@ import (
 
 	"todo/internal/config"
 	"todo/internal/database"
+	grpcserver "todo/internal/grpc"
 	"todo/internal/handlers"
 	"todo/internal/kafka"
 	"todo/internal/redis"
@@ -38,6 +39,7 @@ func main() {
 		server.HandlersModule,
 		redis.Module,
 		kafka.Module,
+		grpcserver.Module,
 		fx.Provide(server.NewServer),
 		// App hooks
 		fx.Invoke(registerAppHooks),
@@ -53,16 +55,27 @@ func registerAppHooks(
 	db *database.Database,
 	redisClient *redis.Client,
 	kafkaClient *kafka.Client,
+	grpcSrv *grpcserver.Server,
 	logger *zap.Logger,
 ) {
 	lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			// Start server in a goroutine
+			// Start HTTP server in a goroutine
 			go func() {
 				if err := server.Start(); err != nil && err != http.ErrServerClosed {
 					logger.Fatal("Failed to start server", zap.Error(err))
 				}
 			}()
+
+			// Start gRPC server in a goroutine
+			if grpcSrv.IsEnabled() {
+				go func() {
+					if err := grpcSrv.Start(); err != nil {
+						logger.Fatal("Failed to start gRPC server", zap.Error(err))
+					}
+				}()
+			}
+
 			logger.Info("Application started successfully")
 			return nil
 		},
@@ -94,7 +107,12 @@ func registerAppHooks(
 				logger.Info("Kafka connection closed")
 			}
 
-			// 4. Graceful shutdown of server
+			// 4. Stop gRPC server gracefully
+			if grpcSrv.IsEnabled() {
+				grpcSrv.GracefulStop()
+			}
+
+			// 5. Graceful shutdown of HTTP server
 			shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutdownCtx); err != nil {

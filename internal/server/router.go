@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"todo/common"
+	"todo/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,8 +45,8 @@ func (r *Router) healthCheck(c *gin.Context) {
 func (r *Router) setupTodoRoutes(v1 *gin.RouterGroup) {
 	todos := v1.Group("/todos")
 	{
-		todos.GET("", r.handlers.TodoHandler.GetAll)
-		todos.POST("", r.handlers.TodoHandler.Create)
+		todos.GET("", middleware.AuthenticateMiddleware, r.handlers.TodoHandler.GetAll)
+		todos.POST("", middleware.AuthenticateMiddleware, r.handlers.TodoHandler.Create)
 		// todos.GET("/:id", r.handlers.TodoHandler.GetByID)
 		// todos.PUT("/:id", r.handlers.TodoHandler.Update)
 		// todos.DELETE("/:id", r.handlers.TodoHandler.Delete)

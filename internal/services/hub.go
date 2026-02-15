@@ -1,16 +1,16 @@
 package services
 
 import (
-	"todo/internal/repositories/todo"
-	"todo/internal/repositories/user"
+	todorepo "todo/internal/repositories/todo"
+	userrepo "todo/internal/repositories/user"
 )
 
 type Hub struct {
-	TodoRepository *todo.TodoRepository
-	UserRepository *user.UserRepository
+	TodoRepository todorepo.ITodoRepository
+	UserRepository userrepo.IUserRepository
 }
 
-func NewHub(todoRepository *todo.TodoRepository, userRepository *user.UserRepository) *Hub {
+func NewHub(todoRepository todorepo.ITodoRepository, userRepository userrepo.IUserRepository) *Hub {
 	return &Hub{
 		TodoRepository: todoRepository,
 		UserRepository: userRepository,

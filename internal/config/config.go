@@ -10,6 +10,12 @@ type Config struct {
 	Database DatabaseConfig
 	Redis    RedisConfig
 	Kafka    KafkaConfig
+	GRPC     GRPCConfig
+}
+
+type GRPCConfig struct {
+	Enabled bool
+	Port    string
 }
 
 type ServerConfig struct {
@@ -65,6 +71,10 @@ func NewConfig() *Config {
 			Enabled: getEnvBool("ENABLE_KAFKA", false),
 			Brokers: getEnvSlice("KAFKA_BROKERS", []string{"localhost:9092"}),
 			Topic:   getEnv("KAFKA_TOPIC", "todo-events"),
+		},
+		GRPC: GRPCConfig{
+			Enabled: getEnvBool("ENABLE_GRPC", true),
+			Port:    getEnv("GRPC_PORT", "50051"),
 		},
 	}
 }
