@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"todo/internal/repositories/chat"
 	"todo/internal/repositories/todo"
 	"todo/internal/repositories/user"
 
@@ -12,5 +13,6 @@ var Module = fx.Options(
 	fx.Provide(
 		todo.NewTodoRepository,
 		user.NewUserRepository,
+		chat.NewChatRepository,
 	),
 )

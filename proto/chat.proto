@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package todo;
+
+option go_package = "todo/proto/todopb";
+
+// ChatService provides real-time messaging via gRPC streaming
+service ChatService {
+  // SendMessage sends a single message and gets a confirmation
+  rpc SendMessage (ChatMessageRequest) returns (ChatMessageResponse);
+  // ChatStream opens a bidirectional stream for real-time chat
+  rpc ChatStream (stream ChatMessageRequest) returns (stream ChatMessageResponse);
+}
+
+message ChatMessageRequest {
+  string room   = 1;
+  string sender = 2;
+  string content = 3;
+}
+
+message ChatMessageResponse {
+  string id        = 1;
+  string room      = 2;
+  string sender    = 3;
+  string content   = 4;
+  string timestamp = 5;
+}

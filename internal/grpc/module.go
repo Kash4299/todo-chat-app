@@ -9,6 +9,7 @@ var Module = fx.Options(
 	fx.Provide(
 		NewTodoGRPCHandler,
 		NewUserGRPCHandler,
+		NewChatGRPCHandler,
 		NewServer,
 	),
 )

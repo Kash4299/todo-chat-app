@@ -10,5 +10,6 @@ var Module = fx.Options(
 		NewHub,
 		NewTodoService,
 		NewUserService,
+		NewChatService,
 	),
 )

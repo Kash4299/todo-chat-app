@@ -19,6 +19,7 @@ type Server struct {
 	grpcServer  *grpc.Server
 	todoHandler *TodoGRPCHandler
 	userHandler *UserGRPCHandler
+	chatHandler *ChatGRPCHandler
 }
 
 func NewServer(
@@ -26,12 +27,14 @@ func NewServer(
 	logger *zap.Logger,
 	todoHandler *TodoGRPCHandler,
 	userHandler *UserGRPCHandler,
+	chatHandler *ChatGRPCHandler,
 ) *Server {
 	grpcServer := grpc.NewServer()
 
 	// Register service implementations
 	pb.RegisterTodoServiceServer(grpcServer, todoHandler)
 	pb.RegisterUserServiceServer(grpcServer, userHandler)
+	pb.RegisterChatServiceServer(grpcServer, chatHandler)
 
 	// Register reflection service for tools like grpcurl
 	reflection.Register(grpcServer)
@@ -42,6 +45,7 @@ func NewServer(
 		grpcServer:  grpcServer,
 		todoHandler: todoHandler,
 		userHandler: userHandler,
+		chatHandler: chatHandler,
 	}
 }
 

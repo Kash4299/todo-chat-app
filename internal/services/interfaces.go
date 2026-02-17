@@ -17,3 +17,11 @@ type IUserService interface {
 	CreateUser(ctx context.Context, req *request.CreateUserRequest) error
 	UserLogin(ctx context.Context, req *request.UserLoginRequest) (string, error)
 }
+
+// IChatService defines the contract for chat business logic
+type IChatService interface {
+	SendMessage(ctx context.Context, room, sender, content string) (*model.ChatMessage, error)
+	Join(room, clientID string) <-chan *model.ChatMessage
+	Leave(room, clientID string)
+	GetRoomHistory(ctx context.Context, room string, limit int) (*[]model.ChatMessage, error)
+}
