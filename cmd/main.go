@@ -3,17 +3,13 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
-	"time"
 
 	"todo/internal/config"
 	"todo/internal/database"
 	grpcserver "todo/internal/grpc"
-	"todo/internal/handlers"
 	"todo/internal/kafka"
 	"todo/internal/redis"
 	"todo/internal/repositories"
-	"todo/internal/server"
 	"todo/internal/services"
 
 	"go.uber.org/fx"
@@ -35,12 +31,9 @@ func main() {
 		// Feature modules
 		repositories.Module,
 		services.Module,
-		handlers.Module,
-		server.HandlersModule,
 		redis.Module,
 		kafka.Module,
 		grpcserver.Module,
-		fx.Provide(server.NewServer),
 		// App hooks
 		fx.Invoke(registerAppHooks),
 	)
@@ -51,7 +44,6 @@ func main() {
 // registerAppHooks registers lifecycle hooks for the application
 func registerAppHooks(
 	lifecycle fx.Lifecycle,
-	server *server.Server,
 	db *database.Database,
 	redisClient *redis.Client,
 	kafkaClient *kafka.Client,
@@ -60,32 +52,22 @@ func registerAppHooks(
 ) {
 	lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			// Start HTTP server in a goroutine
+			// Start gRPC server
 			go func() {
-				if err := server.Start(); err != nil && err != http.ErrServerClosed {
-					logger.Fatal("Failed to start server", zap.Error(err))
+				if err := grpcSrv.Start(); err != nil {
+					logger.Fatal("Failed to start gRPC server", zap.Error(err))
 				}
 			}()
 
-			// Start gRPC server in a goroutine
-			if grpcSrv.IsEnabled() {
-				go func() {
-					if err := grpcSrv.Start(); err != nil {
-						logger.Fatal("Failed to start gRPC server", zap.Error(err))
-					}
-				}()
-			}
-
-			logger.Info("Application started successfully")
+			logger.Info("Application started successfully (gRPC only)")
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
 			logger.Info("Shutting down application...")
 
-			// 1. Close database connection first
+			// 1. Close database connection
 			if err := db.Close(); err != nil {
 				logger.Error("Error closing database connection", zap.Error(err))
-				// Continue to shutdown other services even if db close fails
 			}
 			logger.Info("Database connection closed")
 
@@ -93,7 +75,6 @@ func registerAppHooks(
 			if redisClient.IsEnabled() {
 				if err := redisClient.Close(); err != nil {
 					logger.Error("Error closing Redis connection", zap.Error(err))
-					// Continue to shutdown other services even if redis close fails
 				}
 				logger.Info("Redis connection closed")
 			}
@@ -102,23 +83,13 @@ func registerAppHooks(
 			if kafkaClient.IsEnabled() {
 				if err := kafkaClient.Close(); err != nil {
 					logger.Error("Error closing Kafka connection", zap.Error(err))
-					// Continue to shutdown server even if kafka close fails
 				}
 				logger.Info("Kafka connection closed")
 			}
 
 			// 4. Stop gRPC server gracefully
-			if grpcSrv.IsEnabled() {
-				grpcSrv.GracefulStop()
-			}
+			grpcSrv.GracefulStop()
 
-			// 5. Graceful shutdown of HTTP server
-			shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				logger.Error("Error during server shutdown", zap.Error(err))
-				return err
-			}
 			logger.Info("Application shutdown completed")
 			return nil
 		},
