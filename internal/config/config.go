@@ -31,9 +31,9 @@ func NewConfig() *Config {
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
-		DBUser:     getEnv("DB_USER", "postgres"),
+		DBUser:     getEnv("DB_USERNAME", "postgres"),
 		DBPassword: getEnv("DB_PASSWORD", "postgres"),
-		DBName:     getEnv("DB_NAME", "todo_chat_app"),
+		DBName:     getEnv("DB_DATABASE", "todo_chat_app"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
 
 		RedisHost:     getEnv("REDIS_HOST", "localhost"),

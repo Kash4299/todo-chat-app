@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"sync"
@@ -39,9 +40,12 @@ func NewChatService(msgRepo message.IMessageRepository, taskMemberRepo taskmembe
 }
 
 func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error {
-	isMember, _ := s.taskMemberRepo.IsMember(taskID, userID)
+	isMember, err := s.taskMemberRepo.IsMember(taskID, userID)
+	if err != nil {
+		return err
+	}
 	if !isMember {
-		// Ideally reject WS connection due to Unauthorized, ignoring locally to simulate loosely coupled auth
+		return errors.New("unauthorized: user is not a member")
 	}
 
 	s.mu.Lock()

@@ -10,7 +10,7 @@ build:
 	@echo "Building..."
 	
 	
-	@go build -o main cmd/main.go
+	@go build -o main cmd/server/main.go
 
 # Run the application
 dev:
