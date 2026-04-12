@@ -1,39 +1,48 @@
 package service
 
 import (
-	"errors"
-
 	"github.com/Kash4299/todo-chat-app/internal/model"
-	userRepo "github.com/Kash4299/todo-chat-app/internal/repository/user"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/Kash4299/todo-chat-app/internal/repository/user"
+	"github.com/google/uuid"
 )
 
-type UserService struct {
-	repo userRepo.IUserRepository
+type IUserService interface {
+	SyncAuth0User(auth0ID, email, displayName, avatarURL string) (*model.User, error)
+	GetByAuth0ID(auth0ID string) (*model.User, error)
+	GetByID(id uuid.UUID) (*model.User, error)
 }
 
-func NewUserService(repo userRepo.IUserRepository) IUserService {
+type UserService struct {
+	repo user.IUserRepository
+}
+
+func NewUserService(repo user.IUserRepository) IUserService {
 	return &UserService{repo: repo}
 }
 
-func (s *UserService) Register(user *model.User) error {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
+func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL string) (*model.User, error) {
+	usr, err := s.repo.FindByAuth0ID(auth0ID)
+	if err == nil {
+		return usr, nil
 	}
-	user.Password = string(hashedPassword)
-	return s.repo.Create(user)
+
+	newUser := &model.User{
+		Auth0ID:     auth0ID,
+		Email:       email,
+		DisplayName: displayName,
+		AvatarURL:   avatarURL,
+	}
+
+	if err := s.repo.Create(newUser); err != nil {
+		return nil, err
+	}
+	return newUser, nil
 }
 
-func (s *UserService) Login(email, password string) (*model.User, error) {
-	user, err := s.repo.FindByEmail(email)
-	if err != nil {
-		return nil, errors.New("invalid credentials")
-	}
+func (s *UserService) GetByAuth0ID(auth0ID string) (*model.User, error) {
+	return s.repo.FindByAuth0ID(auth0ID)
+}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
-		return nil, errors.New("invalid credentials")
-	}
-
-	return user, nil
+func (s *UserService) GetByID(id uuid.UUID) (*model.User, error) {
+	return s.repo.FindByID(id)
 }

@@ -1,67 +1,101 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net"
 	"sync"
 
 	"github.com/Kash4299/todo-chat-app/internal/model"
-	chatRepo "github.com/Kash4299/todo-chat-app/internal/repository/chat"
+	"github.com/Kash4299/todo-chat-app/internal/repository/message"
+	"github.com/Kash4299/todo-chat-app/internal/repository/taskmember"
+	"github.com/gobwas/ws/wsutil"
+	"github.com/google/uuid"
 )
 
+type IChatService interface {
+	JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error
+	LeaveRoom(taskID uuid.UUID, conn net.Conn)
+	BroadcastToRoom(taskID uuid.UUID, msg *model.Message)
+}
+type wsClient struct {
+	conn net.Conn
+	mu   sync.Mutex
+}
+
 type ChatService struct {
-	repo  chatRepo.IChatRepository
-	mu    sync.RWMutex
-	rooms map[string]map[chan *model.ChatMessage]bool
+	rooms          map[uuid.UUID]map[net.Conn]*wsClient
+	mu             sync.RWMutex
+	msgRepo        message.IMessageRepository
+	taskMemberRepo taskmember.ITaskMemberRepository
 }
 
-func NewChatService(repo chatRepo.IChatRepository) IChatService {
+func NewChatService(msgRepo message.IMessageRepository, taskMemberRepo taskmember.ITaskMemberRepository) IChatService {
 	return &ChatService{
-		repo:  repo,
-		rooms: make(map[string]map[chan *model.ChatMessage]bool),
+		rooms:          make(map[uuid.UUID]map[net.Conn]*wsClient),
+		msgRepo:        msgRepo,
+		taskMemberRepo: taskMemberRepo,
 	}
 }
 
-func (s *ChatService) SaveMessage(msg *model.ChatMessage) error {
-	return s.repo.SaveMessage(msg)
-}
-
-func (s *ChatService) GetMessagesByRoomID(roomID string) ([]model.ChatMessage, error) {
-	return s.repo.GetMessagesByRoomID(roomID)
-}
-
-func (s *ChatService) RegisterClient(roomID string, client chan *model.ChatMessage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.rooms[roomID] == nil {
-		s.rooms[roomID] = make(map[chan *model.ChatMessage]bool)
+func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error {
+	isMember, err := s.taskMemberRepo.IsMember(taskID, userID)
+	if err != nil {
+		return err
 	}
-	s.rooms[roomID][client] = true
-}
+	if !isMember {
+		return errors.New("unauthorized: user is not a member")
+	}
 
-func (s *ChatService) UnregisterClient(roomID string, client chan *model.ChatMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if clients, ok := s.rooms[roomID]; ok {
-		delete(clients, client)
-		close(client)
-		if len(clients) == 0 {
-			delete(s.rooms, roomID)
+	if s.rooms[taskID] == nil {
+		s.rooms[taskID] = make(map[net.Conn]*wsClient)
+	}
+	s.rooms[taskID][conn] = &wsClient{
+		conn: conn,
+	}
+	return nil
+}
+
+func (s *ChatService) LeaveRoom(taskID uuid.UUID, conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.rooms[taskID]; ok {
+		delete(s.rooms[taskID], conn)
+		if len(s.rooms[taskID]) == 0 {
+			delete(s.rooms, taskID)
 		}
 	}
 }
 
-func (s *ChatService) BroadcastToRoom(roomID string, msg *model.ChatMessage) {
+func (s *ChatService) BroadcastToRoom(taskID uuid.UUID, msg *model.Message) {
+	if err := s.msgRepo.SaveMessage(msg); err != nil {
+		log.Printf("Failed to save message: %v", err)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if clients, ok := s.rooms[roomID]; ok {
-		for client := range clients {
-			select {
-			case client <- msg:
-			default:
-				// skip slow clients
-			}
+	conns, ok := s.rooms[taskID]
+	if !ok {
+		return
+	}
+
+	for _, client := range conns {
+		client.mu.Lock()
+		jsonData, err := json.Marshal(msg)
+		if err == nil {
+			err = wsutil.WriteServerText(client.conn, jsonData)
+		}
+		client.mu.Unlock()
+
+		if err != nil {
+			log.Printf("Error writing json to websocket: %v", err)
+			client.conn.Close()
 		}
 	}
 }

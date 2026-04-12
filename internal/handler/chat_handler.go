@@ -1,128 +1,92 @@
 package handler
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
-	"strconv"
 
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
+	"github.com/google/uuid"
 )
 
 type ChatHandler struct {
-	service  service.IChatService
-	upgrader websocket.Upgrader
+	service service.IChatService
 }
 
 func NewChatHandler(service service.IChatService) *ChatHandler {
-	return &ChatHandler{
-		service: service,
-		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-			CheckOrigin: func(r *http.Request) bool {
-				return true // allow all origins for dev
-			},
-		},
-	}
+	return &ChatHandler{service: service}
 }
 
 type IncomingMessage struct {
-	SenderID uint   `json:"sender_id"`
-	Content  string `json:"content"`
+	SenderID    string `json:"sender_id"`
+	MessageType string `json:"message_type"`
+	Content     string `json:"content"`
 }
 
 func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
-	roomID := c.Param("roomID")
-
-	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
+	taskIDStr := c.Param("taskID")
+	taskID, err := uuid.Parse(taskIDStr)
 	if err != nil {
-		log.Printf("websocket upgrade error: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task ID format"})
 		return
 	}
-	defer conn.Close()
 
-	// Create a client channel and register
-	client := make(chan *model.ChatMessage, 256)
-	h.service.RegisterClient(roomID, client)
-	defer h.service.UnregisterClient(roomID, client)
+	userIDStr := c.Query("userID")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing or invalid userID format in query, mandatory to establish auth validity"})
+		return
+	}
 
-	// Goroutine to write messages from the hub to the WebSocket
-	go func() {
-		for msg := range client {
-			if err := conn.WriteJSON(msg); err != nil {
-				log.Printf("websocket write error: %v", err)
-				return
-			}
-		}
+	conn, _, _, err := ws.UpgradeHTTP(c.Request, c.Writer)
+	if err != nil {
+		log.Printf("Failed to set websocket upgrade: %+v", err)
+		return
+	}
+
+	if err := h.service.JoinRoom(taskID, userID, conn); err != nil {
+		conn.Close()
+		return
+	}
+
+	defer func() {
+		h.service.LeaveRoom(taskID, conn)
+		conn.Close()
 	}()
 
-	// Read messages from the WebSocket and broadcast
 	for {
-		var incoming IncomingMessage
-		if err := conn.ReadJSON(&incoming); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("websocket read error: %v", err)
-			}
+		msgData, op, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			log.Printf("error reading websocket stream: %v", err)
 			break
 		}
 
-		msg := &model.ChatMessage{
-			RoomID:   roomID,
-			SenderID: incoming.SenderID,
-			Content:  incoming.Content,
+		if op != ws.OpText {
+			continue // only accepting text payload containing json
 		}
 
-		// Persist message
-		if err := h.service.SaveMessage(msg); err != nil {
-			log.Printf("failed to save message: %v", err)
+		var incoming IncomingMessage
+		if err := json.Unmarshal(msgData, &incoming); err != nil {
+			log.Printf("error parsing json: %v", err)
+			continue
 		}
 
-		// Broadcast to room
-		h.service.BroadcastToRoom(roomID, msg)
+		senderUUID, parseErr := uuid.Parse(incoming.SenderID)
+		if parseErr != nil {
+			senderUUID = userID // default to connection user
+		}
+
+		msg := &model.Message{
+			TaskID:      taskID,
+			UserID:      senderUUID,
+			MessageType: incoming.MessageType,
+			Content:     incoming.Content,
+		}
+
+		h.service.BroadcastToRoom(taskID, msg)
 	}
-}
-
-func (h *ChatHandler) GetMessages(c *gin.Context) {
-	roomID := c.Param("roomID")
-
-	messages, err := h.service.GetMessagesByRoomID(roomID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"data": messages})
-}
-
-func (h *ChatHandler) SendMessage(c *gin.Context) {
-	roomID := c.Param("roomID")
-
-	var incoming IncomingMessage
-	if err := c.ShouldBindJSON(&incoming); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	senderID, _ := strconv.ParseUint(c.Param("senderID"), 10, 64)
-	if incoming.SenderID == 0 {
-		incoming.SenderID = uint(senderID)
-	}
-
-	msg := &model.ChatMessage{
-		RoomID:   roomID,
-		SenderID: incoming.SenderID,
-		Content:  incoming.Content,
-	}
-
-	if err := h.service.SaveMessage(msg); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	h.service.BroadcastToRoom(roomID, msg)
-
-	c.JSON(http.StatusCreated, gin.H{"data": msg})
 }
