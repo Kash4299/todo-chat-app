@@ -5,7 +5,6 @@ import (
 	"log"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
-	"github.com/Kash4299/todo-chat-app/internal/model"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -22,14 +21,6 @@ func NewPostgresDB(cfg *config.Config) *gorm.DB {
 	}
 
 	log.Println("connected to PostgreSQL successfully")
-
-	if err := db.AutoMigrate(
-		&model.User{},
-		&model.Todo{},
-		&model.ChatMessage{},
-	); err != nil {
-		log.Fatalf("failed to auto-migrate: %v", err)
-	}
 
 	return db
 }

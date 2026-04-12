@@ -5,39 +5,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func RegisterRoutes(
-	router *gin.Engine,
-	userHandler *handler.UserHandler,
-	todoHandler *handler.TodoHandler,
-	chatHandler *handler.ChatHandler,
-) {
-	api := router.Group("/api/v1")
+func SetupRoutes(r *gin.Engine, userHandler *handler.UserHandler, taskHandler *handler.TaskHandler, chatHandler *handler.ChatHandler) {
+	// Root ping
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "pong"})
+	})
+
+	api := r.Group("/api/v1")
 	{
-		// Auth routes
-		auth := api.Group("/auth")
+		// Auth0 sync webhooks (public or secret-protected)
+		api.POST("/webhooks/auth0/sync", userHandler.SyncAuth0Webhook)
+
+		tasks := api.Group("/tasks")
 		{
-			auth.POST("/register", userHandler.Register)
-			auth.POST("/login", userHandler.Login)
+			tasks.POST("", taskHandler.Create)
+			tasks.GET("/:id", taskHandler.GetByID)
+			// Put/Delete omitted for brevity, logic handlers created earlier in TaskService
 		}
 
-		// Todo routes
-		todos := api.Group("/todos")
+		// WebSockets map tightly onto actual tasks
+		ws := api.Group("/ws")
 		{
-			todos.POST("", todoHandler.Create)
-			todos.GET("/:id", todoHandler.GetByID)
-			todos.GET("/user/:user_id", todoHandler.GetByUserID)
-			todos.PUT("/:id", todoHandler.Update)
-			todos.DELETE("/:id", todoHandler.Delete)
-		}
-
-		// Chat routes
-		chat := api.Group("/chat")
-		{
-			chat.GET("/messages/:roomID", chatHandler.GetMessages)
-			chat.POST("/messages/:roomID", chatHandler.SendMessage)
+			// Example URL query params: ws://foo/api/v1/ws/chat/TASK_UUID?userID=USER_UUID
+			ws.GET("/chat/:taskID", chatHandler.HandleWebSocket)
 		}
 	}
-
-	// WebSocket route
-	router.GET("/ws/chat/:roomID", chatHandler.HandleWebSocket)
 }

@@ -23,10 +23,10 @@ func StartServer(
 	cfg *config.Config,
 	router *gin.Engine,
 	userHandler *handler.UserHandler,
-	todoHandler *handler.TodoHandler,
+	taskHandler *handler.TaskHandler,
 	chatHandler *handler.ChatHandler,
 ) {
-	route.RegisterRoutes(router, userHandler, todoHandler, chatHandler)
+	route.SetupRoutes(router, userHandler, taskHandler, chatHandler)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.ServerPort),
