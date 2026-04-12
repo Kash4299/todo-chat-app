@@ -14,7 +14,7 @@ build:
 
 # Run the application
 dev:
-	@go run cmd/main.go
+	@go run cmd/server/main.go
 
 migration-dev:
 	@migrate -database postgresql://$(DB_USERNAME):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_DATABASE)?sslmode=disable -path migrations -verbose up

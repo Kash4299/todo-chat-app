@@ -1,21 +1,17 @@
 package handler
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 )
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
 
 type ChatHandler struct {
 	service service.IChatService
@@ -46,7 +42,7 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, _, _, err := ws.UpgradeHTTP(c.Request, c.Writer)
 	if err != nil {
 		log.Printf("Failed to set websocket upgrade: %+v", err)
 		return
@@ -63,10 +59,20 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 	}()
 
 	for {
-		var incoming IncomingMessage
-		if err := conn.ReadJSON(&incoming); err != nil {
-			log.Printf("error reading json: %v", err)
+		msgData, op, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			log.Printf("error reading websocket stream: %v", err)
 			break
+		}
+
+		if op != ws.OpText {
+			continue // only accepting text payload containing json
+		}
+
+		var incoming IncomingMessage
+		if err := json.Unmarshal(msgData, &incoming); err != nil {
+			log.Printf("error parsing json: %v", err)
+			continue
 		}
 
 		senderUUID, parseErr := uuid.Parse(incoming.SenderID)

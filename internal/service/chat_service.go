@@ -1,24 +1,30 @@
 package service
 
 import (
+	"encoding/json"
 	"log"
+	"net"
 	"sync"
 
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/message"
 	"github.com/Kash4299/todo-chat-app/internal/repository/taskmember"
+	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 )
 
 type IChatService interface {
-	JoinRoom(taskID, userID uuid.UUID, conn *websocket.Conn) error
-	LeaveRoom(taskID uuid.UUID, conn *websocket.Conn)
+	JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error
+	LeaveRoom(taskID uuid.UUID, conn net.Conn)
 	BroadcastToRoom(taskID uuid.UUID, msg *model.Message)
+}
+type wsClient struct {
+	conn net.Conn
+	mu   sync.Mutex
 }
 
 type ChatService struct {
-	rooms          map[uuid.UUID]map[*websocket.Conn]bool
+	rooms          map[uuid.UUID]map[net.Conn]*wsClient
 	mu             sync.RWMutex
 	msgRepo        message.IMessageRepository
 	taskMemberRepo taskmember.ITaskMemberRepository
@@ -26,13 +32,13 @@ type ChatService struct {
 
 func NewChatService(msgRepo message.IMessageRepository, taskMemberRepo taskmember.ITaskMemberRepository) IChatService {
 	return &ChatService{
-		rooms:          make(map[uuid.UUID]map[*websocket.Conn]bool),
+		rooms:          make(map[uuid.UUID]map[net.Conn]*wsClient),
 		msgRepo:        msgRepo,
 		taskMemberRepo: taskMemberRepo,
 	}
 }
 
-func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn *websocket.Conn) error {
+func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error {
 	isMember, _ := s.taskMemberRepo.IsMember(taskID, userID)
 	if !isMember {
 		// Ideally reject WS connection due to Unauthorized, ignoring locally to simulate loosely coupled auth
@@ -42,13 +48,15 @@ func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn *websocket.Conn) e
 	defer s.mu.Unlock()
 
 	if s.rooms[taskID] == nil {
-		s.rooms[taskID] = make(map[*websocket.Conn]bool)
+		s.rooms[taskID] = make(map[net.Conn]*wsClient)
 	}
-	s.rooms[taskID][conn] = true
+	s.rooms[taskID][conn] = &wsClient{
+		conn: conn,
+	}
 	return nil
 }
 
-func (s *ChatService) LeaveRoom(taskID uuid.UUID, conn *websocket.Conn) {
+func (s *ChatService) LeaveRoom(taskID uuid.UUID, conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -73,10 +81,17 @@ func (s *ChatService) BroadcastToRoom(taskID uuid.UUID, msg *model.Message) {
 		return
 	}
 
-	for conn := range conns {
-		if err := conn.WriteJSON(msg); err != nil {
+	for _, client := range conns {
+		client.mu.Lock()
+		jsonData, err := json.Marshal(msg)
+		if err == nil {
+			err = wsutil.WriteServerText(client.conn, jsonData)
+		}
+		client.mu.Unlock()
+
+		if err != nil {
 			log.Printf("Error writing json to websocket: %v", err)
-			conn.Close()
+			client.conn.Close()
 		}
 	}
 }
