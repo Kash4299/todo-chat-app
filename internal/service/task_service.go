@@ -1,37 +1,94 @@
 package service
 
 import (
+	"errors"
+	"strings"
+
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/task"
+	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
+var ErrTaskForbidden = errors.New("forbidden")
+var ErrTaskNotFound = errors.New("task not found")
+var ErrTaskInvalidInput = errors.New("invalid task input")
+
 type ITaskService interface {
-	Create(task *model.Task) error
-	GetByID(id uuid.UUID) (*model.Task, error)
-	GetByUserID(userID uuid.UUID) ([]model.Task, error)
-	Update(task *model.Task) error
+	Create(actorID uuid.UUID, t *model.Task) error
+	GetByID(actorID, id uuid.UUID) (*model.Task, error)
+	GetByWorkspace(workspaceID uuid.UUID) ([]model.Task, error)
+	Update(t *model.Task) error
 	Delete(id uuid.UUID) error
 }
 
 type TaskService struct {
-	repo task.ITaskRepository
+	repo                task.ITaskRepository
+	workspaceMemberRepo workspacemember.IWorkspaceMemberRepository
 }
 
-func NewTaskService(repo task.ITaskRepository) ITaskService {
-	return &TaskService{repo: repo}
+func NewTaskService(
+	repo task.ITaskRepository,
+	workspaceMemberRepo workspacemember.IWorkspaceMemberRepository,
+) ITaskService {
+	return &TaskService{
+		repo:                repo,
+		workspaceMemberRepo: workspaceMemberRepo,
+	}
 }
 
-func (s *TaskService) Create(t *model.Task) error {
+func (s *TaskService) Create(actorID uuid.UUID, t *model.Task) error {
+	if actorID == uuid.Nil || t == nil || t.WorkspaceID == uuid.Nil {
+		return ErrTaskInvalidInput
+	}
+
+	ok, err := s.workspaceMemberRepo.IsMember(t.WorkspaceID, actorID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrTaskForbidden
+	}
+
+	t.CreatedBy = actorID
+	t.Status = "TODO"
+	t.Priority = strings.ToUpper(strings.TrimSpace(t.Priority))
+	if t.Priority == "" {
+		t.Priority = "MEDIUM"
+	}
+	switch t.Priority {
+	case "LOW", "MEDIUM", "HIGH", "URGENT":
+	default:
+		return ErrTaskInvalidInput
+	}
 	return s.repo.Create(t)
 }
 
-func (s *TaskService) GetByID(id uuid.UUID) (*model.Task, error) {
-	return s.repo.FindByID(id)
+func (s *TaskService) GetByID(actorID, id uuid.UUID) (*model.Task, error) {
+	if actorID == uuid.Nil || id == uuid.Nil {
+		return nil, ErrTaskInvalidInput
+	}
+	task, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, err
+	}
+
+	ok, err := s.workspaceMemberRepo.IsMember(task.WorkspaceID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrTaskForbidden
+	}
+	return task, nil
 }
 
-func (s *TaskService) GetByUserID(userID uuid.UUID) ([]model.Task, error) {
-	return s.repo.FindByCreatedBy(userID)
+func (s *TaskService) GetByWorkspace(workspaceID uuid.UUID) ([]model.Task, error) {
+	return s.repo.FindByWorkspace(workspaceID)
 }
 
 func (s *TaskService) Update(t *model.Task) error {

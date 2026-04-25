@@ -9,7 +9,7 @@ import (
 type ITaskRepository interface {
 	Create(task *model.Task) error
 	FindByID(id uuid.UUID) (*model.Task, error)
-	FindByCreatedBy(userID uuid.UUID) ([]model.Task, error)
+	FindByWorkspace(workspaceID uuid.UUID) ([]model.Task, error)
 	Update(task *model.Task) error
 	Delete(id uuid.UUID) error
 }
@@ -34,9 +34,9 @@ func (r *TaskRepository) FindByID(id uuid.UUID) (*model.Task, error) {
 	return &task, nil
 }
 
-func (r *TaskRepository) FindByCreatedBy(userID uuid.UUID) ([]model.Task, error) {
+func (r *TaskRepository) FindByWorkspace(workspaceID uuid.UUID) ([]model.Task, error) {
 	var tasks []model.Task
-	if err := r.db.Where("created_by = ?", userID).Find(&tasks).Error; err != nil {
+	if err := r.db.Where("workspace_id = ?", workspaceID).Order("position ASC, created_at DESC").Find(&tasks).Error; err != nil {
 		return nil, err
 	}
 	return tasks, nil
@@ -47,5 +47,5 @@ func (r *TaskRepository) Update(task *model.Task) error {
 }
 
 func (r *TaskRepository) Delete(id uuid.UUID) error {
-	return r.db.Where("id = ?", id).Delete(&model.Task{}).Error
+	return r.db.Delete(&model.Task{}, id).Error
 }

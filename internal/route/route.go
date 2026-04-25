@@ -6,30 +6,45 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRoutes(r *gin.Engine, userHandler *handler.UserHandler, taskHandler *handler.TaskHandler, chatHandler *handler.ChatHandler, authMiddleware *middleware.AuthMiddleware) {
-	// Root ping
+func SetupRoutes(
+	r *gin.Engine,
+	userHandler *handler.UserHandler,
+	taskHandler *handler.TaskHandler,
+	chatHandler *handler.ChatHandler,
+	authMiddleware *middleware.AuthMiddleware,
+) {
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{"message": "pong"})
 	})
 
 	api := r.Group("/api/v1")
+
+	// Public webhook endpoints
+	webhooks := api.Group("/webhooks")
 	{
-		// Auth0 sync webhooks — protected via shared secret in the handler
-		api.POST("/webhooks/auth0/sync", userHandler.SyncAuth0Webhook)
+		webhooks.POST("/auth0/users.sync", userHandler.SyncAuth0User)
+	}
 
-		authenticated := api.Group("")
-		authenticated.Use(authMiddleware.Handle())
+	// Authenticated endpoints
+	protected := api.Group("")
+	protected.Use(authMiddleware.Handle())
+	{
+		auth := protected.Group("/auth")
 		{
-			tasks := authenticated.Group("/tasks")
-			{
-				tasks.POST("", taskHandler.Create)
-				tasks.GET("/:id", taskHandler.GetByID)
-			}
+			auth.POST("/link-identities/confirm", userHandler.ConfirmAccountLink)
+		}
 
-			ws := authenticated.Group("/ws")
-			{
-				ws.GET("/chat/:taskID", chatHandler.HandleWebSocket)
-			}
+		protected.GET("/users/me", userHandler.GetMe)
+
+		tasks := protected.Group("/tasks")
+		{
+			tasks.POST("", taskHandler.Create)
+			tasks.GET("/:id", taskHandler.GetByID)
+		}
+
+		ws := protected.Group("/ws")
+		{
+			ws.GET("/channels/:channelID", chatHandler.HandleWebSocket)
 		}
 	}
 }

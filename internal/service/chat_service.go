@@ -15,122 +15,114 @@ import (
 )
 
 type IChatService interface {
-	JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error
-	LeaveRoom(taskID uuid.UUID, conn net.Conn)
-	BroadcastToRoom(taskID uuid.UUID, msg *model.Message)
+	JoinRoom(channelID, userID uuid.UUID, conn net.Conn) error
+	LeaveRoom(channelID uuid.UUID, conn net.Conn)
+	BroadcastToRoom(channelID uuid.UUID, msg *model.Message)
 }
+
 type wsClient struct {
 	conn net.Conn
 	mu   sync.Mutex
 }
 
-type roomClient struct {
+type roomConn struct {
 	conn   net.Conn
 	client *wsClient
 }
 
+// ChatService is an in-memory single-instance implementation.
+// TODO (PoC Spike): replace BroadcastToRoom with Kafka AsyncProducer fan-out
+// so that multiple WS server instances can share messages across the cluster.
 type ChatService struct {
-	rooms          map[uuid.UUID]map[net.Conn]*wsClient
-	mu             sync.RWMutex
-	msgRepo        message.IMessageRepository
-	taskMemberRepo taskmember.ITaskMemberRepository
+	rooms         map[uuid.UUID]map[net.Conn]*wsClient
+	mu            sync.RWMutex
+	msgRepo       message.IMessageRepository
+	channelMember taskmember.IChannelMemberRepository
 }
 
-func NewChatService(msgRepo message.IMessageRepository, taskMemberRepo taskmember.ITaskMemberRepository) IChatService {
+func NewChatService(
+	msgRepo message.IMessageRepository,
+	channelMember taskmember.IChannelMemberRepository,
+) IChatService {
 	return &ChatService{
-		rooms:          make(map[uuid.UUID]map[net.Conn]*wsClient),
-		msgRepo:        msgRepo,
-		taskMemberRepo: taskMemberRepo,
+		rooms:         make(map[uuid.UUID]map[net.Conn]*wsClient),
+		msgRepo:       msgRepo,
+		channelMember: channelMember,
 	}
 }
 
-func (s *ChatService) JoinRoom(taskID, userID uuid.UUID, conn net.Conn) error {
-	isMember, err := s.taskMemberRepo.IsMember(taskID, userID)
+func (s *ChatService) JoinRoom(channelID, userID uuid.UUID, conn net.Conn) error {
+	ok, err := s.channelMember.IsMember(channelID, userID)
 	if err != nil {
 		return err
 	}
-	if !isMember {
-		return errors.New("unauthorized: user is not a member")
+	if !ok {
+		return errors.New("unauthorized: user is not a channel member")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.rooms[taskID] == nil {
-		s.rooms[taskID] = make(map[net.Conn]*wsClient)
+	if s.rooms[channelID] == nil {
+		s.rooms[channelID] = make(map[net.Conn]*wsClient)
 	}
-	s.rooms[taskID][conn] = &wsClient{
-		conn: conn,
-	}
+	s.rooms[channelID][conn] = &wsClient{conn: conn}
 	return nil
 }
 
-func (s *ChatService) LeaveRoom(taskID uuid.UUID, conn net.Conn) {
+func (s *ChatService) LeaveRoom(channelID uuid.UUID, conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if _, ok := s.rooms[taskID]; ok {
-		delete(s.rooms[taskID], conn)
-		if len(s.rooms[taskID]) == 0 {
-			delete(s.rooms, taskID)
+	if room, ok := s.rooms[channelID]; ok {
+		delete(room, conn)
+		if len(room) == 0 {
+			delete(s.rooms, channelID)
 		}
 	}
 }
 
-func (s *ChatService) BroadcastToRoom(taskID uuid.UUID, msg *model.Message) {
-	if err := s.msgRepo.SaveMessage(msg); err != nil {
-		log.Printf("Failed to save message: %v", err)
+func (s *ChatService) BroadcastToRoom(channelID uuid.UUID, msg *model.Message) {
+	if err := s.msgRepo.Save(msg); err != nil {
+		log.Printf("failed to persist message: %v", err)
 	}
 
 	s.mu.RLock()
-	conns, ok := s.rooms[taskID]
+	conns, ok := s.rooms[channelID]
 	if !ok {
 		s.mu.RUnlock()
 		return
 	}
-
-	clients := make([]roomClient, 0, len(conns))
+	clients := make([]roomConn, 0, len(conns))
 	for conn, client := range conns {
-		clients = append(clients, roomClient{
-			conn:   conn,
-			client: client,
-		})
+		clients = append(clients, roomConn{conn: conn, client: client})
 	}
 	s.mu.RUnlock()
 
-	failedConns := make([]net.Conn, 0)
-	for _, roomClient := range clients {
-		client := roomClient.client
-		client.mu.Lock()
-		jsonData, err := json.Marshal(msg)
+	var failed []net.Conn
+	for _, rc := range clients {
+		rc.client.mu.Lock()
+		data, err := json.Marshal(msg)
 		if err == nil {
-			err = wsutil.WriteServerText(client.conn, jsonData)
+			err = wsutil.WriteServerText(rc.client.conn, data)
 		}
-		client.mu.Unlock()
-
+		rc.client.mu.Unlock()
 		if err != nil {
-			log.Printf("Error writing json to websocket: %v", err)
-			client.conn.Close()
-			failedConns = append(failedConns, roomClient.conn)
+			log.Printf("ws write error: %v", err)
+			rc.client.conn.Close()
+			failed = append(failed, rc.conn)
 		}
 	}
 
-	if len(failedConns) == 0 {
+	if len(failed) == 0 {
 		return
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	room, ok := s.rooms[taskID]
-	if !ok {
-		return
-	}
-
-	for _, conn := range failedConns {
-		delete(room, conn)
-	}
-	if len(room) == 0 {
-		delete(s.rooms, taskID)
+	if room, ok := s.rooms[channelID]; ok {
+		for _, conn := range failed {
+			delete(room, conn)
+		}
+		if len(room) == 0 {
+			delete(s.rooms, channelID)
+		}
 	}
 }

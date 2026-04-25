@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
 	"gorm.io/driver/postgres"
@@ -19,6 +20,14 @@ func NewPostgresDB(cfg *config.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sql db handle: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.DBConnMaxLifetime) * time.Second)
 
 	log.Println("connected to PostgreSQL successfully")
 

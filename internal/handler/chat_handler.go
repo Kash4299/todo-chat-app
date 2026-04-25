@@ -24,11 +24,9 @@ type ChatHandler struct {
 
 func NewChatHandler(svc service.IChatService, cfg *config.Config) *ChatHandler {
 	var origins []string
-	if cfg.AllowedOrigins != "" {
-		for _, o := range strings.Split(cfg.AllowedOrigins, ",") {
-			if trimmed := strings.TrimSpace(o); trimmed != "" {
-				origins = append(origins, trimmed)
-			}
+	for _, o := range strings.Split(cfg.AllowedOrigins, ",") {
+		if trimmed := strings.TrimSpace(o); trimmed != "" {
+			origins = append(origins, trimmed)
 		}
 	}
 	return &ChatHandler{service: svc, allowedOrigins: origins}
@@ -46,25 +44,16 @@ func (h *ChatHandler) isOriginAllowed(origin string) bool {
 	return false
 }
 
-type IncomingMessage struct {
+type incomingMessage struct {
 	MessageType string `json:"message_type"`
 	Content     string `json:"content"`
 }
 
-func messageFromIncoming(taskID, userID uuid.UUID, incoming IncomingMessage) *model.Message {
-	return &model.Message{
-		TaskID:      taskID,
-		UserID:      userID,
-		MessageType: incoming.MessageType,
-		Content:     incoming.Content,
-	}
-}
-
 func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
-	taskIDStr := c.Param("taskID")
-	taskID, err := uuid.Parse(taskIDStr)
+	channelIDStr := c.Param("channelID")
+	channelID, err := uuid.Parse(channelIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task ID format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
 		return
 	}
 
@@ -74,8 +63,8 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 		return
 	}
 	userID, ok := userIDVal.(uuid.UUID)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user identity in context"})
+	if !ok || userID == uuid.Nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user identity"})
 		return
 	}
 
@@ -86,17 +75,16 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 
 	conn, _, _, err := ws.UpgradeHTTP(c.Request, c.Writer)
 	if err != nil {
-		log.Printf("Failed to set websocket upgrade: %+v", err)
+		log.Printf("ws upgrade failed: %v", err)
 		return
 	}
 
-	if err := h.service.JoinRoom(taskID, userID, conn); err != nil {
+	if err := h.service.JoinRoom(channelID, userID, conn); err != nil {
 		conn.Close()
 		return
 	}
-
 	defer func() {
-		h.service.LeaveRoom(taskID, conn)
+		h.service.LeaveRoom(channelID, conn)
 		conn.Close()
 	}()
 
@@ -104,21 +92,25 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		msgData, op, err := wsutil.ReadClientData(conn)
 		if err != nil {
-			log.Printf("error reading websocket stream: %v", err)
+			log.Printf("ws read error: %v", err)
 			break
 		}
-
 		if op != ws.OpText {
-			continue // only accepting text payload containing json
-		}
-
-		var incoming IncomingMessage
-		if err := json.Unmarshal(msgData, &incoming); err != nil {
-			log.Printf("error parsing json: %v", err)
 			continue
 		}
 
-		msg := messageFromIncoming(taskID, userID, incoming)
-		h.service.BroadcastToRoom(taskID, msg)
+		var incoming incomingMessage
+		if err := json.Unmarshal(msgData, &incoming); err != nil {
+			log.Printf("ws json parse error: %v", err)
+			continue
+		}
+
+		msg := &model.Message{
+			ChannelID:   channelID,
+			UserID:      userID,
+			MessageType: incoming.MessageType,
+			Content:     incoming.Content,
+		}
+		h.service.BroadcastToRoom(channelID, msg)
 	}
 }
