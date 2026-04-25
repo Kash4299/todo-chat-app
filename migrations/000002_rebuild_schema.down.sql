@@ -18,6 +18,7 @@ DROP TRIGGER IF EXISTS trg_workspaces_updated_at ON workspaces;
 DROP TRIGGER IF EXISTS trg_users_updated_at      ON users;
 
 DROP FUNCTION IF EXISTS trigger_set_updated_at();
+DROP FUNCTION IF EXISTS immutable_unaccent(text);
 DROP EXTENSION IF EXISTS "unaccent";
 
 -- ==========================================

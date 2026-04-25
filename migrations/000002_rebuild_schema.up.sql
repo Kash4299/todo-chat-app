@@ -11,6 +11,16 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "unaccent";
 
 -- ==========================================
+-- HELPER: immutable wrapper for unaccent
+-- unaccent() is STABLE so it cannot be used inside a GENERATED column.
+-- This thin SQL wrapper is declared IMMUTABLE so PostgreSQL allows it.
+-- ==========================================
+CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+AS $$ SELECT public.unaccent('unaccent'::regdictionary, $1); $$;
+
+-- ==========================================
 -- TRIGGER FUNCTION: auto-update updated_at
 -- ==========================================
 CREATE OR REPLACE FUNCTION trigger_set_updated_at()
@@ -197,7 +207,7 @@ CREATE TABLE messages (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- GENERATED: do not write this column directly
     search_vector tsvector GENERATED ALWAYS AS (
-        to_tsvector('simple', unaccent(coalesce(content, '')))
+        to_tsvector('simple', immutable_unaccent(coalesce(content, '')))
     ) STORED,
     CONSTRAINT chk_message_type    CHECK (message_type IN ('TEXT', 'SYSTEM')),
     CONSTRAINT chk_message_content CHECK (
