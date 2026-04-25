@@ -29,6 +29,10 @@ type Config struct {
 	Auth0Audience string
 	WebhookSecret string
 
+	JWTSecret           string
+	JWTAccessExpiryMin  int
+	JWTRefreshExpiryDay int
+
 	AllowedOrigins string
 }
 
@@ -58,6 +62,10 @@ func NewConfig() *Config {
 		Auth0Domain:   getEnv("AUTH0_DOMAIN", ""),
 		Auth0Audience: getEnv("AUTH0_AUDIENCE", ""),
 		WebhookSecret: getEnv("WEBHOOK_SECRET", ""),
+
+		JWTSecret:           getEnv("JWT_SECRET", ""),
+		JWTAccessExpiryMin:  getEnvAsInt("JWT_ACCESS_EXPIRY_MIN", 15),
+		JWTRefreshExpiryDay: getEnvAsInt("JWT_REFRESH_EXPIRY_DAY", 7),
 
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
 	}

@@ -22,18 +22,14 @@ import (
 
 const UserIDContextKey = "authedUserID"
 const Auth0IDContextKey = "authedAuth0ID"
-const EmailContextKey = "authedEmail"
-const DisplayNameContextKey = "authedDisplayName"
-const AvatarURLContextKey = "authedAvatarURL"
-const EmailVerifiedContextKey = "authedEmailVerified"
-const StepUpVerifiedContextKey = "authedStepUpVerified"
 
 type AuthMiddleware struct {
-	userService service.IUserService
-	issuer      string
-	audience    string
-	jwksURL     string
-	httpClient  *http.Client
+	userService    service.IUserService
+	issuer         string
+	audience       string
+	jwksURL        string
+	localJWTSecret string
+	httpClient     *http.Client
 
 	mu      sync.RWMutex
 	jwksByK map[string]*rsa.PublicKey
@@ -53,12 +49,13 @@ func NewAuthMiddleware(cfg *config.Config, userService service.IUserService) (*A
 	}
 
 	return &AuthMiddleware{
-		userService: userService,
-		issuer:      "https://" + domain + "/",
-		audience:    cfg.Auth0Audience,
-		jwksURL:     "https://" + domain + "/.well-known/jwks.json",
-		httpClient:  &http.Client{Timeout: 5 * time.Second},
-		jwksByK:     make(map[string]*rsa.PublicKey),
+		userService:    userService,
+		issuer:         "https://" + domain + "/",
+		audience:       cfg.Auth0Audience,
+		jwksURL:        "https://" + domain + "/.well-known/jwks.json",
+		localJWTSecret: cfg.JWTSecret,
+		httpClient:     &http.Client{Timeout: 5 * time.Second},
+		jwksByK:        make(map[string]*rsa.PublicKey),
 	}, nil
 }
 
@@ -66,7 +63,6 @@ func (m *AuthMiddleware) Handle() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr := extractBearer(c)
 		if tokenStr == "" {
-			// Also accept token from query param for WebSocket upgrades
 			tokenStr = c.Query("token")
 		}
 		if tokenStr == "" {
@@ -79,100 +75,79 @@ func (m *AuthMiddleware) Handle() gin.HandlerFunc {
 			tokenStr,
 			claims,
 			m.keyFunc,
-			jwt.WithValidMethods([]string{"RS256"}),
-			jwt.WithIssuer(m.issuer),
-			jwt.WithAudience(m.audience),
+			jwt.WithValidMethods([]string{"RS256", "HS256"}),
 		)
-
 		if err != nil || !token.Valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 
-		sub, _ := claims["sub"].(string)
-		if strings.TrimSpace(sub) == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
+		kid, _ := token.Header["kid"].(string)
 
-		email, _ := claims["email"].(string)
-		displayName, _ := claims["name"].(string)
-		avatarURL, _ := claims["picture"].(string)
-		emailVerified, _ := claims["email_verified"].(bool)
-		stepUpVerified := hasRecentStepUp(claims)
-
-		user, err := m.userService.SyncAuth0User(sub, email, displayName, avatarURL, emailVerified)
-		if errors.Is(err, service.ErrUserLinkingRequired) {
-			c.Set(Auth0IDContextKey, sub)
-			c.Set(EmailContextKey, email)
-			c.Set(DisplayNameContextKey, displayName)
-			c.Set(AvatarURLContextKey, avatarURL)
-			c.Set(EmailVerifiedContextKey, emailVerified)
-			c.Set(StepUpVerifiedContextKey, stepUpVerified)
-			if c.FullPath() == "/api/v1/auth/link-identities/confirm" {
-				c.Next()
-				return
-			}
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "account linking required",
-				"code":  "ACCOUNT_LINKING_REQUIRED",
-			})
-			return
+		if kid != "" {
+			m.handleAuth0Token(c, claims)
+		} else {
+			m.handleLocalToken(c, claims)
 		}
-		if errors.Is(err, service.ErrUserEmailNotVerified) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "email is not verified",
-				"code":  "EMAIL_NOT_VERIFIED",
-			})
-			return
-		}
-		if err != nil || user == nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user identity not recognized"})
-			return
-		}
-		if user.ID == uuid.Nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid user identity"})
-			return
-		}
-
-		c.Set(UserIDContextKey, user.ID)
-		c.Set(Auth0IDContextKey, sub)
-		c.Next()
 	}
 }
 
-func hasRecentStepUp(claims jwt.MapClaims) bool {
-	authTime := int64(0)
-	switch v := claims["auth_time"].(type) {
-	case float64:
-		authTime = int64(v)
-	case json.Number:
-		if parsed, err := v.Int64(); err == nil {
-			authTime = parsed
-		}
+func (m *AuthMiddleware) handleAuth0Token(c *gin.Context, claims jwt.MapClaims) {
+	iss, _ := claims["iss"].(string)
+	if iss != m.issuer {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
 	}
-	if authTime <= 0 {
-		return false
-	}
-	if time.Since(time.Unix(authTime, 0)) > 5*time.Minute {
-		return false
+	if !hasAudience(claims, m.audience) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
 	}
 
-	amrRaw, ok := claims["amr"]
-	if !ok {
-		return false
+	sub, _ := claims["sub"].(string)
+	if strings.TrimSpace(sub) == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
 	}
-	amrList, ok := amrRaw.([]any)
-	if !ok {
-		return false
+
+	email, _ := claims["email"].(string)
+	displayName, _ := claims["name"].(string)
+	avatarURL, _ := claims["picture"].(string)
+	emailVerified, _ := claims["email_verified"].(bool)
+
+	user, err := m.userService.SyncAuth0User(sub, email, displayName, avatarURL, emailVerified)
+	if errors.Is(err, service.ErrUserEmailNotVerified) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": "email is not verified",
+			"code":  "EMAIL_NOT_VERIFIED",
+		})
+		return
 	}
-	for _, factor := range amrList {
-		val, _ := factor.(string)
-		if val == "mfa" || val == "pwd" {
-			return true
-		}
+	if err != nil || user == nil || user.ID == uuid.Nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user identity not recognized"})
+		return
 	}
-	return false
+
+	c.Set(UserIDContextKey, user.ID)
+	c.Set(Auth0IDContextKey, sub)
+	c.Next()
+}
+
+func (m *AuthMiddleware) handleLocalToken(c *gin.Context, claims jwt.MapClaims) {
+	iss, _ := claims["iss"].(string)
+	if iss != service.LocalIssuer {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+
+	sub, _ := claims["sub"].(string)
+	userID, err := uuid.Parse(sub)
+	if err != nil || userID == uuid.Nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+
+	c.Set(UserIDContextKey, userID)
+	c.Next()
 }
 
 func extractBearer(c *gin.Context) string {
@@ -185,20 +160,30 @@ func extractBearer(c *gin.Context) string {
 
 func (m *AuthMiddleware) keyFunc(token *jwt.Token) (any, error) {
 	kid, _ := token.Header["kid"].(string)
-	if strings.TrimSpace(kid) == "" {
-		return nil, fmt.Errorf("token is missing kid")
+
+	if kid != "" {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("expected RS256 for Auth0 token")
+		}
+		if key := m.lookupKey(kid); key != nil {
+			return key, nil
+		}
+		if err := m.refreshJWKS(); err != nil {
+			return nil, err
+		}
+		if key := m.lookupKey(kid); key != nil {
+			return key, nil
+		}
+		return nil, fmt.Errorf("no public key found for kid")
 	}
 
-	if key := m.lookupKey(kid); key != nil {
-		return key, nil
+	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		return nil, fmt.Errorf("expected HS256 for local token")
 	}
-	if err := m.refreshJWKS(); err != nil {
-		return nil, err
+	if m.localJWTSecret == "" {
+		return nil, fmt.Errorf("local JWT not configured")
 	}
-	if key := m.lookupKey(kid); key != nil {
-		return key, nil
-	}
-	return nil, fmt.Errorf("no public key found for kid")
+	return []byte(m.localJWTSecret), nil
 }
 
 func (m *AuthMiddleware) lookupKey(kid string) *rsa.PublicKey {
@@ -265,6 +250,24 @@ func normalizeAuth0Domain(raw string) (string, error) {
 		return "", fmt.Errorf("invalid AUTH0_DOMAIN: missing host")
 	}
 	return strings.TrimSuffix(u.Host, "/"), nil
+}
+
+func hasAudience(claims jwt.MapClaims, audience string) bool {
+	aud, ok := claims["aud"]
+	if !ok {
+		return false
+	}
+	switch v := aud.(type) {
+	case string:
+		return v == audience
+	case []interface{}:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == audience {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type jwksDocument struct {

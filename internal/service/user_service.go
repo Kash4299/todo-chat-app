@@ -12,15 +12,11 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrUserLinkingRequired = errors.New("account linking required")
-var ErrUserLinkingConsentRequired = errors.New("account linking consent is required")
-var ErrUserStepUpRequired = errors.New("step-up authentication is required")
 var ErrUserEmailNotVerified = errors.New("email is not verified")
 var ErrUserNotFound = errors.New("user not found")
 
 type IUserService interface {
 	SyncAuth0User(auth0ID, email, displayName, avatarURL string, emailVerified bool) (*model.User, error)
-	ConfirmAccountLink(auth0ID, email, displayName, avatarURL string, emailVerified, consent, stepUp bool) (*model.User, error)
 	GetByAuth0ID(auth0ID string) (*model.User, error)
 	GetByID(id uuid.UUID) (*model.User, error)
 }
@@ -73,14 +69,25 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 		return nil, errors.New("email is required for first login")
 	}
 
-	// Identity does not exist yet. Never auto-link by email.
-	// Require explicit user consent + step-up via ConfirmAccountLink.
+	// Identity does not exist yet. Auto-link by verified email if an account exists.
 	if existingByEmail, err := s.userRepo.FindByEmail(email); err == nil {
 		if !emailVerified {
 			return nil, ErrUserEmailNotVerified
 		}
-		_ = existingByEmail
-		return nil, ErrUserLinkingRequired
+		if linkErr := s.userIdentityRepo.Create(&model.UserIdentity{
+			UserID:          existingByEmail.ID,
+			Provider:        provider,
+			ProviderSubject: auth0ID,
+			EmailAtLinkTime: email,
+			IsPrimary:       false,
+		}); linkErr != nil {
+			existingIdentity, findErr := s.userIdentityRepo.FindByProviderSubject(auth0ID)
+			if findErr != nil {
+				return nil, linkErr
+			}
+			return s.userRepo.FindByID(existingIdentity.UserID)
+		}
+		return existingByEmail, nil
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -95,7 +102,7 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 		AvatarURL:   avatarURL,
 	}
 	if err := s.userRepo.Create(newUser); err != nil {
-		// If another request created this user concurrently, continue by linking to that row.
+		// Concurrent create: fall back to the existing row.
 		existingByEmail, findErr := s.userRepo.FindByEmail(email)
 		if findErr != nil {
 			return nil, err
@@ -120,73 +127,6 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 		return existingUser, nil
 	}
 	return newUser, nil
-}
-
-func (s *UserService) ConfirmAccountLink(
-	auth0ID, email, displayName, avatarURL string,
-	emailVerified, consent, stepUp bool,
-) (*model.User, error) {
-	auth0ID = strings.TrimSpace(auth0ID)
-	email = strings.ToLower(strings.TrimSpace(email))
-	displayName = strings.TrimSpace(displayName)
-	avatarURL = strings.TrimSpace(avatarURL)
-
-	if auth0ID == "" {
-		return nil, errors.New("auth0 subject is required")
-	}
-	provider, err := providerFromSubject(auth0ID)
-	if err != nil {
-		return nil, err
-	}
-	if !consent {
-		return nil, ErrUserLinkingConsentRequired
-	}
-	if !stepUp {
-		return nil, ErrUserStepUpRequired
-	}
-	if !emailVerified {
-		return nil, ErrUserEmailNotVerified
-	}
-	if email == "" {
-		return nil, errors.New("email is required for account linking")
-	}
-
-	identity, err := s.userIdentityRepo.FindByProviderSubject(auth0ID)
-	if err == nil {
-		return s.userRepo.FindByID(identity.UserID)
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-
-	user, err := s.userRepo.FindByEmail(email)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-
-	if err := s.userIdentityRepo.Create(&model.UserIdentity{
-		UserID:          user.ID,
-		Provider:        provider,
-		ProviderSubject: auth0ID,
-		EmailAtLinkTime: email,
-		IsPrimary:       false,
-	}); err != nil {
-		existingIdentity, findErr := s.userIdentityRepo.FindByProviderSubject(auth0ID)
-		if findErr != nil {
-			return nil, err
-		}
-		user, findErr = s.userRepo.FindByID(existingIdentity.UserID)
-		if findErr != nil {
-			return nil, findErr
-		}
-	}
-	if err := s.updateUserProfile(user, email, displayName, avatarURL); err != nil {
-		return nil, err
-	}
-	return user, nil
 }
 
 func (s *UserService) GetByAuth0ID(auth0ID string) (*model.User, error) {

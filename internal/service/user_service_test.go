@@ -147,26 +147,56 @@ func TestUserService_SyncAuth0User_UpdatesExistingUser(t *testing.T) {
 	}
 }
 
-func TestUserService_SyncAuth0User_LinksByVerifiedEmail(t *testing.T) {
+func TestUserService_SyncAuth0User_AutoLinksVerifiedEmail(t *testing.T) {
 	existing := &model.User{
 		ID:          uuid.New(),
 		Email:       "same@example.com",
 		DisplayName: "Existing",
 	}
+	userRepo := &mockUserRepo{findByEmailUser: existing}
+	identityRepo := &mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound}
+	svc := service.NewUserService(userRepo, identityRepo)
+
+	user, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if user == nil || user.ID != existing.ID {
+		t.Fatal("expected existing user returned after auto-link")
+	}
+	if identityRepo.createCalls != 1 {
+		t.Fatalf("expected one identity row created, got %d", identityRepo.createCalls)
+	}
+	if identityRepo.created[0].IsPrimary {
+		t.Fatal("expected non-primary identity for linked account")
+	}
+}
+
+func TestUserService_SyncAuth0User_AutoLinkRaceHandled(t *testing.T) {
+	existing := &model.User{ID: uuid.New(), Email: "same@example.com"}
+	findCalls := 0
+	identityRepo := &mockUserIdentityRepo{
+		createErr: errors.New("duplicate"),
+		findBySubjectFn: func(s string) (*model.UserIdentity, error) {
+			findCalls++
+			if findCalls == 1 {
+				return nil, gorm.ErrRecordNotFound
+			}
+			return &model.UserIdentity{UserID: existing.ID}, nil
+		},
+	}
 	userRepo := &mockUserRepo{
 		findByEmailUser: existing,
-	}
-	identityRepo := &mockUserIdentityRepo{
-		findBySubjectErr: gorm.ErrRecordNotFound,
+		findByIDUser:    existing,
 	}
 	svc := service.NewUserService(userRepo, identityRepo)
 
-	_, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
-	if !errors.Is(err, service.ErrUserLinkingRequired) {
-		t.Fatalf("expected ErrUserLinkingRequired, got %v", err)
+	user, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
+	if err != nil {
+		t.Fatalf("expected nil error on race recovery, got %v", err)
 	}
-	if identityRepo.createCalls != 0 {
-		t.Fatalf("expected zero identity row created before consent, got %d", identityRepo.createCalls)
+	if user == nil || user.ID != existing.ID {
+		t.Fatal("expected existing user from race recovery")
 	}
 }
 
@@ -176,76 +206,13 @@ func TestUserService_SyncAuth0User_RejectsUnverifiedEmailLinking(t *testing.T) {
 		Email:       "same@example.com",
 		DisplayName: "Existing",
 	}
-	userRepo := &mockUserRepo{
-		findByEmailUser: existing,
-	}
-	identityRepo := &mockUserIdentityRepo{
-		findBySubjectErr: gorm.ErrRecordNotFound,
-	}
+	userRepo := &mockUserRepo{findByEmailUser: existing}
+	identityRepo := &mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound}
 	svc := service.NewUserService(userRepo, identityRepo)
 
 	_, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", false)
 	if !errors.Is(err, service.ErrUserEmailNotVerified) {
 		t.Fatalf("expected ErrUserEmailNotVerified, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_Success(t *testing.T) {
-	existing := &model.User{
-		ID:          uuid.New(),
-		Email:       "same@example.com",
-		DisplayName: "Existing",
-	}
-	userRepo := &mockUserRepo{
-		findByEmailUser: existing,
-	}
-	identityRepo := &mockUserIdentityRepo{
-		findBySubjectErr: gorm.ErrRecordNotFound,
-	}
-	svc := service.NewUserService(userRepo, identityRepo)
-
-	user, err := svc.ConfirmAccountLink("google-oauth2|xyz", "same@example.com", "Existing", "", true, true, true)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if user == nil || user.ID != existing.ID {
-		t.Fatal("expected linked existing user")
-	}
-	if identityRepo.createCalls != 1 {
-		t.Fatalf("expected one identity row created, got %d", identityRepo.createCalls)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_RequiresConsent(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-
-	_, err := svc.ConfirmAccountLink("google-oauth2|xyz", "same@example.com", "", "", true, false, true)
-	if !errors.Is(err, service.ErrUserLinkingConsentRequired) {
-		t.Fatalf("expected ErrUserLinkingConsentRequired, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_RequiresStepUp(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-
-	_, err := svc.ConfirmAccountLink("google-oauth2|xyz", "same@example.com", "", "", true, true, false)
-	if !errors.Is(err, service.ErrUserStepUpRequired) {
-		t.Fatalf("expected ErrUserStepUpRequired, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_UserNotFound(t *testing.T) {
-	userRepo := &mockUserRepo{
-		findByEmailErr: gorm.ErrRecordNotFound,
-	}
-	identityRepo := &mockUserIdentityRepo{
-		findBySubjectErr: gorm.ErrRecordNotFound,
-	}
-	svc := service.NewUserService(userRepo, identityRepo)
-
-	_, err := svc.ConfirmAccountLink("google-oauth2|xyz", "same@example.com", "", "", true, true, true)
-	if !errors.Is(err, service.ErrUserNotFound) {
-		t.Fatalf("expected ErrUserNotFound, got %v", err)
 	}
 }
 
@@ -428,130 +395,6 @@ func TestUserService_SyncAuth0User_IdentityCreateErrorThenFindUserByIDError(t *t
 	}
 }
 
-func TestUserService_ConfirmAccountLink_RequiresAuth0ID(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-	_, err := svc.ConfirmAccountLink(" ", "x@example.com", "", "", true, true, true)
-	if err == nil {
-		t.Fatal("expected error for empty auth0 id")
-	}
-}
-
-func TestUserService_ConfirmAccountLink_InvalidSubjectFormat(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-	_, err := svc.ConfirmAccountLink("invalid-subject", "x@example.com", "", "", true, true, true)
-	if err == nil {
-		t.Fatal("expected invalid subject format error")
-	}
-}
-
-func TestUserService_ConfirmAccountLink_RequiresEmailVerified(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", false, true, true)
-	if !errors.Is(err, service.ErrUserEmailNotVerified) {
-		t.Fatalf("expected ErrUserEmailNotVerified, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_RequiresEmail(t *testing.T) {
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{})
-	_, err := svc.ConfirmAccountLink("auth0|x", " ", "", "", true, true, true)
-	if err == nil {
-		t.Fatal("expected email required error")
-	}
-}
-
-func TestUserService_ConfirmAccountLink_ExistingIdentityReturnsUser(t *testing.T) {
-	u := &model.User{ID: uuid.New(), Email: "x@example.com"}
-	svc := service.NewUserService(
-		&mockUserRepo{findByIDUser: u},
-		&mockUserIdentityRepo{findBySubjectIdentity: &model.UserIdentity{UserID: u.ID}},
-	)
-	got, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if got.ID != u.ID {
-		t.Fatal("expected existing identity user")
-	}
-}
-
-func TestUserService_ConfirmAccountLink_IdentityLookupUnexpectedError(t *testing.T) {
-	expected := errors.New("identity query failed")
-	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{findBySubjectErr: expected})
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if !errors.Is(err, expected) {
-		t.Fatalf("expected %v, got %v", expected, err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_FindByEmailUnexpectedError(t *testing.T) {
-	expected := errors.New("email query failed")
-	svc := service.NewUserService(
-		&mockUserRepo{findByEmailErr: expected},
-		&mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound},
-	)
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if !errors.Is(err, expected) {
-		t.Fatalf("expected %v, got %v", expected, err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_IdentityCreateErrorAndLookupError(t *testing.T) {
-	createErr := errors.New("identity create failed")
-	svc := service.NewUserService(
-		&mockUserRepo{findByEmailUser: &model.User{ID: uuid.New(), Email: "x@example.com"}},
-		&mockUserIdentityRepo{
-			findBySubjectErr: gorm.ErrRecordNotFound,
-			createErr:        createErr,
-		},
-	)
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if !errors.Is(err, createErr) {
-		t.Fatalf("expected createErr, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_IdentityCreateErrorThenFindByIDError(t *testing.T) {
-	findByIDErr := errors.New("find by id failed")
-	findCalls := 0
-	svc := service.NewUserService(
-		&mockUserRepo{
-			findByEmailUser: &model.User{ID: uuid.New(), Email: "x@example.com"},
-			findByIDErr:     findByIDErr,
-		},
-		&mockUserIdentityRepo{
-			findBySubjectErr: gorm.ErrRecordNotFound,
-			createErr:        errors.New("identity create failed"),
-			findBySubjectFn: func(providerSubject string) (*model.UserIdentity, error) {
-				findCalls++
-				if findCalls == 1 {
-					return nil, gorm.ErrRecordNotFound
-				}
-				return &model.UserIdentity{UserID: uuid.New()}, nil
-			},
-		},
-	)
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if !errors.Is(err, findByIDErr) {
-		t.Fatalf("expected findByIDErr, got %v", err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_UpdateProfileError(t *testing.T) {
-	updateErr := errors.New("update failed")
-	svc := service.NewUserService(
-		&mockUserRepo{
-			findByEmailUser: &model.User{ID: uuid.New(), Email: "old@example.com", DisplayName: "old"},
-			updateErr:       updateErr,
-		},
-		&mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound},
-	)
-	_, err := svc.ConfirmAccountLink("auth0|x", "new@example.com", "new", "", true, true, true)
-	if !errors.Is(err, updateErr) {
-		t.Fatalf("expected updateErr, got %v", err)
-	}
-}
-
 func TestUserService_GetByAuth0IDRepoPaths(t *testing.T) {
 	identityErr := errors.New("identity error")
 	svc := service.NewUserService(&mockUserRepo{}, &mockUserIdentityRepo{findBySubjectErr: identityErr})
@@ -615,45 +458,5 @@ func TestUserService_SyncAuth0User_IdentityCreateErrorThenRecoverByLookup(t *tes
 	}
 	if user.ID != recoveredUser.ID {
 		t.Fatal("expected recovered user from identity lookup")
-	}
-}
-
-func TestUserService_ConfirmAccountLink_ExistingIdentityUserLookupError(t *testing.T) {
-	expected := errors.New("user lookup failed")
-	svc := service.NewUserService(
-		&mockUserRepo{findByIDErr: expected},
-		&mockUserIdentityRepo{findBySubjectIdentity: &model.UserIdentity{UserID: uuid.New()}},
-	)
-	_, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if !errors.Is(err, expected) {
-		t.Fatalf("expected %v, got %v", expected, err)
-	}
-}
-
-func TestUserService_ConfirmAccountLink_IdentityCreateErrorThenRecoverByLookup(t *testing.T) {
-	recoveredUser := &model.User{ID: uuid.New(), Email: "x@example.com"}
-	findCalls := 0
-	svc := service.NewUserService(
-		&mockUserRepo{
-			findByEmailUser: recoveredUser,
-			findByIDUser:    recoveredUser,
-		},
-		&mockUserIdentityRepo{
-			createErr: errors.New("duplicate identity"),
-			findBySubjectFn: func(providerSubject string) (*model.UserIdentity, error) {
-				findCalls++
-				if findCalls == 1 {
-					return nil, gorm.ErrRecordNotFound
-				}
-				return &model.UserIdentity{UserID: recoveredUser.ID}, nil
-			},
-		},
-	)
-	user, err := svc.ConfirmAccountLink("auth0|x", "x@example.com", "", "", true, true, true)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if user.ID != recoveredUser.ID {
-		t.Fatal("expected recovered user from fallback lookup")
 	}
 }

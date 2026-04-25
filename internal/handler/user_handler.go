@@ -2,7 +2,6 @@ package handler
 
 import (
 	"crypto/subtle"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -30,10 +29,6 @@ type auth0SyncWebhookRequest struct {
 	EmailVerified bool   `json:"email_verified"`
 }
 
-type confirmAccountLinkRequest struct {
-	Consent bool `json:"consent"`
-}
-
 func (h *UserHandler) SyncAuth0User(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 
@@ -56,52 +51,6 @@ func (h *UserHandler) SyncAuth0User(c *gin.Context) {
 	user, err := h.service.SyncAuth0User(req.Auth0ID, req.Email, req.DisplayName, req.AvatarURL, req.EmailVerified)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"user": user})
-}
-
-func (h *UserHandler) ConfirmAccountLink(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
-
-	var req confirmAccountLinkRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	auth0ID, _ := c.Get(middleware.Auth0IDContextKey)
-	email, _ := c.Get(middleware.EmailContextKey)
-	displayName, _ := c.Get(middleware.DisplayNameContextKey)
-	avatarURL, _ := c.Get(middleware.AvatarURLContextKey)
-	emailVerified, _ := c.Get(middleware.EmailVerifiedContextKey)
-	stepUpVerified, _ := c.Get(middleware.StepUpVerifiedContextKey)
-
-	auth0IDStr, _ := auth0ID.(string)
-	emailStr, _ := email.(string)
-	displayNameStr, _ := displayName.(string)
-	avatarURLStr, _ := avatarURL.(string)
-	emailVerifiedBool, _ := emailVerified.(bool)
-	stepUpVerifiedBool, _ := stepUpVerified.(bool)
-
-	user, err := h.service.ConfirmAccountLink(
-		auth0IDStr, emailStr, displayNameStr, avatarURLStr,
-		emailVerifiedBool, req.Consent, stepUpVerifiedBool,
-	)
-	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrUserLinkingConsentRequired):
-			c.JSON(http.StatusBadRequest, gin.H{"error": "consent is required"})
-		case errors.Is(err, service.ErrUserStepUpRequired):
-			c.JSON(http.StatusForbidden, gin.H{"error": "step-up authentication required"})
-		case errors.Is(err, service.ErrUserEmailNotVerified):
-			c.JSON(http.StatusForbidden, gin.H{"error": "email is not verified"})
-		case errors.Is(err, service.ErrUserNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found for linking"})
-		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		}
 		return
 	}
 

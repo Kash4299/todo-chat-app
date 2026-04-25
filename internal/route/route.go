@@ -9,6 +9,7 @@ import (
 func SetupRoutes(
 	r *gin.Engine,
 	userHandler *handler.UserHandler,
+	localAuthHandler *handler.LocalAuthHandler,
 	taskHandler *handler.TaskHandler,
 	chatHandler *handler.ChatHandler,
 	authMiddleware *middleware.AuthMiddleware,
@@ -25,16 +26,21 @@ func SetupRoutes(
 		webhooks.POST("/auth0/users.sync", userHandler.SyncAuth0User)
 	}
 
+	// Public auth endpoints (email/password)
+	auth := api.Group("/auth")
+	{
+		auth.POST("/register", localAuthHandler.Register)
+		auth.POST("/login", localAuthHandler.Login)
+		auth.POST("/refresh", localAuthHandler.Refresh)
+		auth.POST("/logout", localAuthHandler.Logout)
+	}
+
 	// Authenticated endpoints
 	protected := api.Group("")
 	protected.Use(authMiddleware.Handle())
 	{
-		auth := protected.Group("/auth")
-		{
-			auth.POST("/link-identities/confirm", userHandler.ConfirmAccountLink)
-		}
-
 		protected.GET("/users/me", userHandler.GetMe)
+		protected.POST("/users/me/password", localAuthHandler.SetPassword)
 
 		tasks := protected.Group("/tasks")
 		{

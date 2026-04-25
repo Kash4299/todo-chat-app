@@ -16,68 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestNormalizeAuth0Domain(t *testing.T) {
-	domain, err := normalizeAuth0Domain("my-tenant.us.auth0.com")
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if domain != "my-tenant.us.auth0.com" {
-		t.Fatalf("unexpected domain: %s", domain)
-	}
-}
-
-func TestNormalizeAuth0DomainRejectsInvalid(t *testing.T) {
-	_, err := normalizeAuth0Domain("http://")
-	if err == nil {
-		t.Fatal("expected error for invalid domain")
-	}
-}
-
-func TestDecodeRSAPublicKey(t *testing.T) {
-	n := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4})
-	e := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}) // 65537
-
-	key, err := decodeRSAPublicKey(n, e)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if key.E != 65537 {
-		t.Fatalf("expected exponent 65537, got %d", key.E)
-	}
-}
-
-func TestExtractBearer(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/", nil)
-	c.Request.Header.Set("Authorization", "Bearer abc")
-
-	token := extractBearer(c)
-	if token != "abc" {
-		t.Fatalf("expected abc, got %s", token)
-	}
-}
-
-func TestHasRecentStepUp(t *testing.T) {
-	claims := jwt.MapClaims{
-		"auth_time": float64(time.Now().Add(-2 * time.Minute).Unix()),
-		"amr":       []any{"pwd"},
-	}
-	if !hasRecentStepUp(claims) {
-		t.Fatal("expected step-up true")
-	}
-}
-
-func TestHasRecentStepUpRejectsOldAuthTime(t *testing.T) {
-	claims := jwt.MapClaims{
-		"auth_time": float64(time.Now().Add(-20 * time.Minute).Unix()),
-		"amr":       []any{"mfa"},
-	}
-	if hasRecentStepUp(claims) {
-		t.Fatal("expected step-up false")
-	}
-}
+// ── Mock ──────────────────────────────────────────────────────────────────────
 
 type mockUserServiceForMW struct {
 	syncErr error
@@ -94,137 +33,10 @@ func (m *mockUserServiceForMW) SyncAuth0User(auth0ID, email, displayName, avatar
 	return &model.User{ID: uuid.New()}, nil
 }
 
-func (m *mockUserServiceForMW) ConfirmAccountLink(auth0ID, email, displayName, avatarURL string, emailVerified, consent, stepUp bool) (*model.User, error) {
-	return nil, nil
-}
+func (m *mockUserServiceForMW) GetByAuth0ID(auth0ID string) (*model.User, error) { return nil, nil }
+func (m *mockUserServiceForMW) GetByID(id uuid.UUID) (*model.User, error)        { return nil, nil }
 
-func (m *mockUserServiceForMW) GetByAuth0ID(auth0ID string) (*model.User, error) {
-	return nil, nil
-}
-
-func (m *mockUserServiceForMW) GetByID(id uuid.UUID) (*model.User, error) {
-	return nil, nil
-}
-
-func TestAuthMiddleware_AllowsPendingLinkRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{syncErr: service.ErrUserLinkingRequired},
-		issuer:      "https://issuer/",
-		audience:    "aud",
-		jwksByK: map[string]*rsa.PublicKey{
-			"kid-1": &priv.PublicKey,
-		},
-	}
-
-	r := gin.New()
-	r.POST("/api/v1/auth/link-identities/confirm", mw.Handle(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"step_up": c.GetBool(StepUpVerifiedContextKey),
-		})
-	})
-
-	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{
-		"sub":            "google-oauth2|abc",
-		"email":          "a@example.com",
-		"email_verified": true,
-		"auth_time":      float64(time.Now().Unix()),
-		"amr":            []string{"pwd"},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/link-identities/confirm", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestAuthMiddleware_BlocksNonLinkRouteWhenLinkingRequired(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{syncErr: service.ErrUserLinkingRequired},
-		issuer:      "https://issuer/",
-		audience:    "aud",
-		jwksByK: map[string]*rsa.PublicKey{
-			"kid-1": &priv.PublicKey,
-		},
-	}
-
-	r := gin.New()
-	r.GET("/api/v1/users/me", mw.Handle(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-
-	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{
-		"sub":            "google-oauth2|abc",
-		"email":          "a@example.com",
-		"email_verified": true,
-		"auth_time":      float64(time.Now().Unix()),
-		"amr":            []string{"pwd"},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
-
-func TestAuthMiddleware_BlocksWhenEmailNotVerified(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{syncErr: service.ErrUserEmailNotVerified},
-		issuer:      "https://issuer/",
-		audience:    "aud",
-		jwksByK: map[string]*rsa.PublicKey{
-			"kid-1": &priv.PublicKey,
-		},
-	}
-
-	r := gin.New()
-	r.GET("/api/v1/users/me", mw.Handle(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-
-	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{
-		"sub":            "google-oauth2|abc",
-		"email":          "a@example.com",
-		"email_verified": false,
-		"auth_time":      float64(time.Now().Unix()),
-		"amr":            []string{"pwd"},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func buildTestToken(
 	t *testing.T,
@@ -253,12 +65,74 @@ func buildTestToken(
 	return signed
 }
 
-func TestHasRecentStepUpRejectsMissingAmr(t *testing.T) {
+func buildLocalToken(t *testing.T, secret string, userID uuid.UUID, issuer string, expiry time.Duration) string {
+	t.Helper()
 	claims := jwt.MapClaims{
-		"auth_time": float64(time.Now().Add(-2 * time.Minute).Unix()),
+		"sub": userID.String(),
+		"iss": issuer,
+		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(expiry).Unix(),
 	}
-	if hasRecentStepUp(claims) {
-		t.Fatal("expected step-up false")
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign local token: %v", err)
+	}
+	return signed
+}
+
+// ── Tests: normalizeAuth0Domain ───────────────────────────────────────────────
+
+func TestNormalizeAuth0Domain(t *testing.T) {
+	domain, err := normalizeAuth0Domain("my-tenant.us.auth0.com")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if domain != "my-tenant.us.auth0.com" {
+		t.Fatalf("unexpected domain: %s", domain)
+	}
+}
+
+func TestNormalizeAuth0DomainRejectsInvalid(t *testing.T) {
+	_, err := normalizeAuth0Domain("http://")
+	if err == nil {
+		t.Fatal("expected error for invalid domain")
+	}
+}
+
+// ── Tests: decodeRSAPublicKey ─────────────────────────────────────────────────
+
+func TestDecodeRSAPublicKey(t *testing.T) {
+	n := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4})
+	e := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}) // 65537
+
+	key, err := decodeRSAPublicKey(n, e)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if key.E != 65537 {
+		t.Fatalf("expected exponent 65537, got %d", key.E)
+	}
+}
+
+func TestDecodeRSAPublicKeyRejectsBadInput(t *testing.T) {
+	_, err := decodeRSAPublicKey("%%%", "%%%")
+	if err == nil {
+		t.Fatal("expected decode error")
+	}
+}
+
+// ── Tests: extractBearer ──────────────────────────────────────────────────────
+
+func TestExtractBearer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/", nil)
+	c.Request.Header.Set("Authorization", "Bearer abc")
+
+	if token := extractBearer(c); token != "abc" {
+		t.Fatalf("expected abc, got %s", token)
 	}
 }
 
@@ -268,15 +142,157 @@ func TestExtractBearerMissingToken(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
-	token := extractBearer(c)
-	if token != "" {
+	if token := extractBearer(c); token != "" {
 		t.Fatalf("expected empty token, got %s", token)
 	}
 }
 
-func TestDecodeRSAPublicKeyRejectsBadInput(t *testing.T) {
-	_, err := decodeRSAPublicKey("%%%", "%%%")
-	if err == nil {
-		t.Fatal("expected decode error")
+// ── Tests: Auth0 RS256 path ───────────────────────────────────────────────────
+
+func TestAuthMiddleware_BlocksWhenEmailNotVerified(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	mw := &AuthMiddleware{
+		userService: &mockUserServiceForMW{syncErr: service.ErrUserEmailNotVerified},
+		issuer:      "https://issuer/",
+		audience:    "aud",
+		jwksByK:     map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},
+	}
+
+	r := gin.New()
+	r.GET("/api/v1/users/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{
+		"sub":            "google-oauth2|abc",
+		"email":          "a@example.com",
+		"email_verified": false,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_Auth0_RejectsWrongIssuer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	mw := &AuthMiddleware{
+		userService: &mockUserServiceForMW{},
+		issuer:      "https://issuer/",
+		audience:    "aud",
+		jwksByK:     map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	token := buildTestToken(t, priv, "kid-1", "https://wrong-issuer/", "aud", map[string]any{
+		"sub": "auth0|abc",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// ── Tests: local HS256 path ───────────────────────────────────────────────────
+
+func TestAuthMiddleware_LocalToken_ValidHS256(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "test-secret-32-chars-minimum!!!!"
+	userID := uuid.New()
+
+	mw := &AuthMiddleware{
+		localJWTSecret: secret,
+		jwksByK:        make(map[string]*rsa.PublicKey),
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		id, _ := c.Get(UserIDContextKey)
+		c.JSON(http.StatusOK, gin.H{"id": id.(uuid.UUID).String()})
+	})
+
+	tokenStr := buildLocalToken(t, secret, userID, service.LocalIssuer, 15*time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthMiddleware_LocalToken_WrongSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	userID := uuid.New()
+
+	mw := &AuthMiddleware{
+		localJWTSecret: "correct-secret-32-chars-minimum!!",
+		jwksByK:        make(map[string]*rsa.PublicKey),
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	tokenStr := buildLocalToken(t, "wrong-secret-32-chars-minimum!!!!", userID, service.LocalIssuer, 15*time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_LocalToken_WrongIssuer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "test-secret-32-chars-minimum!!!!"
+	userID := uuid.New()
+
+	mw := &AuthMiddleware{
+		localJWTSecret: secret,
+		jwksByK:        make(map[string]*rsa.PublicKey),
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	tokenStr := buildLocalToken(t, secret, userID, "wrong-issuer", 15*time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
