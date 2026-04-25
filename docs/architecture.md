@@ -12,10 +12,10 @@
 **Vấn đề cụ thể trong code hiện tại:**
 
 ```
-chat_handler.go → service.BroadcastToRoom(taskID, msg)
+chat_handler.go → service.BroadcastToRoom(channelID, msg)
                        ↓
                In-memory room map
-               [taskID] → [conn1, conn2, conn3]
+               [channelID] → [conn1, conn2, conn3]
 ```
 
 Khi chạy 1 instance: hoạt động bình thường.
@@ -31,13 +31,12 @@ Client A gửi tin nhắn →
   WS Server #2 KHÔNG biết → Client B KHÔNG nhận được tin nhắn
 ```
 
-**3 vấn đề phụ đi kèm:**
+**2 vấn đề phụ đi kèm:**
 
 | Vấn đề | Vị trí trong code | Hậu quả |
 |---|---|---|
 | `sarama.SyncProducer` | `pkg/kafka/kafka.go:23` | Block goroutine mỗi lần publish → bottleneck nặng ở high load |
 | `sarama.Consumer` thay vì `ConsumerGroup` | `pkg/kafka/kafka.go:36` | Kafka partitions không được chia đều giữa các WS instances → một instance xử lý tất cả |
-| `task` = `room` conflation | schema, `chat_handler.go:64` | Không có channel độc lập (general, random) ngoài task → giới hạn product |
 
 ---
 
@@ -348,7 +347,6 @@ sequenceDiagram
 erDiagram
     USERS {
         uuid id PK
-        string primary_auth0_user_id UK
         string email UK
         string display_name
         string avatar_url
@@ -361,7 +359,7 @@ erDiagram
     USER_IDENTITIES {
         uuid id PK
         uuid user_id FK
-        string provider "AUTH0_DB|GOOGLE_OAUTH2|..."
+        string provider "AUTH0|GOOGLE-OAUTH2|SPOTIFY|..."
         string provider_subject UK "full Auth0 sub"
         string email_at_link_time
         boolean is_primary
@@ -525,6 +523,8 @@ AWS VPC (private subnets)
 | 1 | `SyncProducer` block goroutine | `pkg/kafka/kafka.go:23` | Chuyển sang `AsyncProducer` |
 | 2 | `sarama.Consumer` thay vì `ConsumerGroup` | `pkg/kafka/kafka.go:36` | Dùng `sarama.NewConsumerGroup` |
 | 3 | `BroadcastToRoom` in-memory | `chat_service.go` | Route qua Kafka fan-out |
-| 4 | Identity model chưa hỗ trợ account linking | `users` schema + auth service | Thêm `user_identities`, policy link an toàn theo email verified |
-| 5 | Thiếu `workspace` + `channel` concept | DB schema | Viết migration mới trước Sprint 2 |
-| 6 | `task` conflated với `chat room` | Toàn bộ codebase | Tách `channel` thành entity riêng |
+| 4 | ~~Identity model chưa hỗ trợ account linking~~ | ~~`users` schema + auth service~~ | ✅ Implemented: `user_identities` + consent/step-up policy |
+| 5 | ~~Thiếu `workspace` + `channel` concept~~ | ~~DB schema~~ | ✅ Implemented: migration 002 |
+| 6 | ~~`task` conflated với `chat room`~~ | ~~Toàn bộ codebase~~ | ✅ Implemented: `channels` là entity riêng |
+| 7 | Redis `idmap:{sub}` → `user_id` caching chưa implement | `middleware/auth.go` | `FindByProviderSubject` gọi mỗi request → cần Redis lookup trước để tránh DB bottleneck |
+| 8 | JWKS refresh không có `singleflight` guard | `middleware/auth.go:refreshJWKS` | Khi Auth0 rotate keys, nhiều goroutines cùng gọi Auth0 JWKS endpoint → thundering herd |

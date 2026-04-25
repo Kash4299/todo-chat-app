@@ -16,6 +16,7 @@ var Module = fx.Options(
 	fx.Provide(task.NewTaskRepository),
 	fx.Provide(taskmember.NewTaskMemberRepository),
 	fx.Provide(message.NewMessageRepository),
+	// token repo is reserved for Spotify OAuth token storage (T59); not consumed by any service yet
 	fx.Provide(token.NewRefreshTokenRepository),
 	fx.Provide(useridentity.NewUserIdentityRepository),
 	fx.Provide(workspacemember.NewWorkspaceMemberRepository),
