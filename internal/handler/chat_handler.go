@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
+	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
@@ -14,17 +18,46 @@ import (
 )
 
 type ChatHandler struct {
-	service service.IChatService
+	service        service.IChatService
+	allowedOrigins []string
 }
 
-func NewChatHandler(service service.IChatService) *ChatHandler {
-	return &ChatHandler{service: service}
+func NewChatHandler(svc service.IChatService, cfg *config.Config) *ChatHandler {
+	var origins []string
+	if cfg.AllowedOrigins != "" {
+		for _, o := range strings.Split(cfg.AllowedOrigins, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				origins = append(origins, trimmed)
+			}
+		}
+	}
+	return &ChatHandler{service: svc, allowedOrigins: origins}
+}
+
+func (h *ChatHandler) isOriginAllowed(origin string) bool {
+	if len(h.allowedOrigins) == 0 {
+		return true
+	}
+	for _, allowed := range h.allowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	return false
 }
 
 type IncomingMessage struct {
-	SenderID    string `json:"sender_id"`
 	MessageType string `json:"message_type"`
 	Content     string `json:"content"`
+}
+
+func messageFromIncoming(taskID, userID uuid.UUID, incoming IncomingMessage) *model.Message {
+	return &model.Message{
+		TaskID:      taskID,
+		UserID:      userID,
+		MessageType: incoming.MessageType,
+		Content:     incoming.Content,
+	}
 }
 
 func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
@@ -35,10 +68,19 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	userIDStr := c.Query("userID")
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing or invalid userID format in query, mandatory to establish auth validity"})
+	userIDVal, exists := c.Get(middleware.UserIDContextKey)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	userID, ok := userIDVal.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user identity in context"})
+		return
+	}
+
+	if !h.isOriginAllowed(c.Request.Header.Get("Origin")) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "origin not allowed"})
 		return
 	}
 
@@ -59,6 +101,7 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 	}()
 
 	for {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		msgData, op, err := wsutil.ReadClientData(conn)
 		if err != nil {
 			log.Printf("error reading websocket stream: %v", err)
@@ -75,18 +118,7 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 			continue
 		}
 
-		senderUUID, parseErr := uuid.Parse(incoming.SenderID)
-		if parseErr != nil {
-			senderUUID = userID // default to connection user
-		}
-
-		msg := &model.Message{
-			TaskID:      taskID,
-			UserID:      senderUUID,
-			MessageType: incoming.MessageType,
-			Content:     incoming.Content,
-		}
-
+		msg := messageFromIncoming(taskID, userID, incoming)
 		h.service.BroadcastToRoom(taskID, msg)
 	}
 }

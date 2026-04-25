@@ -24,15 +24,18 @@ FROM alpine:latest
 # Install ca-certificates for HTTPS requests
 RUN apk --no-cache add ca-certificates
 
-WORKDIR /root/
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
 
 # Copy the binaries and migrations from builder stage
 COPY --from=builder /app/main .
 COPY --from=builder /app/migrate .
 COPY --from=builder /app/migrations ./migrations
 
-# Expose port
+RUN chown -R appuser:appgroup /app
+USER appuser
+
 EXPOSE 8080
 
-# Run the application
 CMD ["./main"]

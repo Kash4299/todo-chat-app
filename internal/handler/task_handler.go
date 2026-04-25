@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
@@ -20,21 +21,19 @@ func NewTaskHandler(service service.ITaskService) *TaskHandler {
 type CreateTaskRequest struct {
 	Title       string `json:"title" binding:"required"`
 	Description string `json:"description"`
-	CreatedBy   string `json:"created_by" binding:"required"`
 }
 
 func (h *TaskHandler) Create(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+
 	var req CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	creatorID, err := uuid.Parse(req.CreatedBy)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid created_by format"})
-		return
-	}
+	userIDVal, _ := c.Get(middleware.UserIDContextKey)
+	creatorID, _ := userIDVal.(uuid.UUID)
 
 	task := &model.Task{
 		Title:       req.Title,
@@ -43,7 +42,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 
 	if err := h.service.Create(task); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 

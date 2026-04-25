@@ -24,6 +24,11 @@ type wsClient struct {
 	mu   sync.Mutex
 }
 
+type roomClient struct {
+	conn   net.Conn
+	client *wsClient
+}
+
 type ChatService struct {
 	rooms          map[uuid.UUID]map[net.Conn]*wsClient
 	mu             sync.RWMutex
@@ -78,14 +83,24 @@ func (s *ChatService) BroadcastToRoom(taskID uuid.UUID, msg *model.Message) {
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	conns, ok := s.rooms[taskID]
 	if !ok {
+		s.mu.RUnlock()
 		return
 	}
 
-	for _, client := range conns {
+	clients := make([]roomClient, 0, len(conns))
+	for conn, client := range conns {
+		clients = append(clients, roomClient{
+			conn:   conn,
+			client: client,
+		})
+	}
+	s.mu.RUnlock()
+
+	failedConns := make([]net.Conn, 0)
+	for _, roomClient := range clients {
+		client := roomClient.client
 		client.mu.Lock()
 		jsonData, err := json.Marshal(msg)
 		if err == nil {
@@ -96,6 +111,26 @@ func (s *ChatService) BroadcastToRoom(taskID uuid.UUID, msg *model.Message) {
 		if err != nil {
 			log.Printf("Error writing json to websocket: %v", err)
 			client.conn.Close()
+			failedConns = append(failedConns, roomClient.conn)
 		}
+	}
+
+	if len(failedConns) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	room, ok := s.rooms[taskID]
+	if !ok {
+		return
+	}
+
+	for _, conn := range failedConns {
+		delete(room, conn)
+	}
+	if len(room) == 0 {
+		delete(s.rooms, taskID)
 	}
 }

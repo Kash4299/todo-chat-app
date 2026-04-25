@@ -47,3 +47,5 @@ todo
 # Database files
 *.db
 *.sqlite 
+
+improvements/*

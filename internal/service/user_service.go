@@ -1,9 +1,12 @@
 package service
 
 import (
+	"errors"
+
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/user"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type IUserService interface {
@@ -24,6 +27,9 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 	usr, err := s.repo.FindByAuth0ID(auth0ID)
 	if err == nil {
 		return usr, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 
 	newUser := &model.User{

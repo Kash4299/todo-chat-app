@@ -21,6 +21,12 @@ type Config struct {
 	RedisDB       int
 
 	KafkaBrokers string
+
+	Auth0Domain   string
+	Auth0Audience string
+
+	WebhookSecret  string
+	AllowedOrigins string
 }
 
 func NewConfig() *Config {
@@ -42,6 +48,12 @@ func NewConfig() *Config {
 		RedisDB:       redisDB,
 
 		KafkaBrokers: getEnv("KAFKA_BROKERS", "localhost:9092"),
+
+		Auth0Domain:   getEnv("AUTH0_DOMAIN", ""),
+		Auth0Audience: getEnv("AUTH0_AUDIENCE", ""),
+
+		WebhookSecret:  getEnv("WEBHOOK_SECRET", ""),
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
 	}
 }
 

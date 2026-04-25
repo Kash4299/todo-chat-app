@@ -10,10 +10,13 @@ services:
       - SERVER_HOST=0.0.0.0
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USER=postgres
+      - DB_USERNAME=postgres
       - DB_PASSWORD=password
-      - DB_NAME=todo_chat_app
+      - DB_DATABASE=todo_chat_app
       - DB_SSLMODE=disable
+      - AUTH0_DOMAIN=dev-todo-chat-app.us.auth0.com
+      # AUTH0_AUDIENCE: set to your API Identifier (Auth0 dashboard: APIs > your API > General > API Identifier)
+      - AUTH0_AUDIENCE=
     depends_on:
       - postgres
     networks:

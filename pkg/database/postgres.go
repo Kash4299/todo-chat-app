@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewPostgresDB(cfg *config.Config) *gorm.DB {
+func NewPostgresDB(cfg *config.Config) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBSSLMode,
@@ -17,10 +17,10 @@ func NewPostgresDB(cfg *config.Config) *gorm.DB {
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("failed to connect to PostgreSQL: %v", err)
+		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
 
 	log.Println("connected to PostgreSQL successfully")
 
-	return db
+	return db, nil
 }
