@@ -147,7 +147,7 @@ func TestUserService_SyncAuth0User_UpdatesExistingUser(t *testing.T) {
 	}
 }
 
-func TestUserService_SyncAuth0User_AutoLinksVerifiedEmail(t *testing.T) {
+func TestUserService_SyncAuth0User_RequiresConsentForEmailConflict(t *testing.T) {
 	existing := &model.User{
 		ID:          uuid.New(),
 		Email:       "same@example.com",
@@ -157,46 +157,19 @@ func TestUserService_SyncAuth0User_AutoLinksVerifiedEmail(t *testing.T) {
 	identityRepo := &mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound}
 	svc := service.NewUserService(userRepo, identityRepo)
 
-	user, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+	_, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
+	var linkErr *service.LinkRequiredError
+	if !errors.As(err, &linkErr) {
+		t.Fatalf("expected *service.LinkRequiredError, got %v", err)
 	}
-	if user == nil || user.ID != existing.ID {
-		t.Fatal("expected existing user returned after auto-link")
+	if linkErr.GoogleSub != "google-oauth2|xyz" {
+		t.Fatalf("expected GoogleSub google-oauth2|xyz, got %s", linkErr.GoogleSub)
 	}
-	if identityRepo.createCalls != 1 {
-		t.Fatalf("expected one identity row created, got %d", identityRepo.createCalls)
+	if linkErr.Email != "same@example.com" {
+		t.Fatalf("expected Email same@example.com, got %s", linkErr.Email)
 	}
-	if identityRepo.created[0].IsPrimary {
-		t.Fatal("expected non-primary identity for linked account")
-	}
-}
-
-func TestUserService_SyncAuth0User_AutoLinkRaceHandled(t *testing.T) {
-	existing := &model.User{ID: uuid.New(), Email: "same@example.com"}
-	findCalls := 0
-	identityRepo := &mockUserIdentityRepo{
-		createErr: errors.New("duplicate"),
-		findBySubjectFn: func(s string) (*model.UserIdentity, error) {
-			findCalls++
-			if findCalls == 1 {
-				return nil, gorm.ErrRecordNotFound
-			}
-			return &model.UserIdentity{UserID: existing.ID}, nil
-		},
-	}
-	userRepo := &mockUserRepo{
-		findByEmailUser: existing,
-		findByIDUser:    existing,
-	}
-	svc := service.NewUserService(userRepo, identityRepo)
-
-	user, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", true)
-	if err != nil {
-		t.Fatalf("expected nil error on race recovery, got %v", err)
-	}
-	if user == nil || user.ID != existing.ID {
-		t.Fatal("expected existing user from race recovery")
+	if identityRepo.createCalls != 0 {
+		t.Fatal("expected no identity row created — consent not yet given")
 	}
 }
 

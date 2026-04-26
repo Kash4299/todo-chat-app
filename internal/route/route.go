@@ -23,7 +23,7 @@ func SetupRoutes(
 	// Public webhook endpoints
 	webhooks := api.Group("/webhooks")
 	{
-		webhooks.POST("/auth0/users.sync", userHandler.SyncAuth0User)
+		webhooks.POST("/auth0/sync", userHandler.SyncAuth0User)
 	}
 
 	// Public auth endpoints (email/password)
@@ -33,6 +33,7 @@ func SetupRoutes(
 		auth.POST("/login", localAuthHandler.Login)
 		auth.POST("/refresh", localAuthHandler.Refresh)
 		auth.POST("/logout", localAuthHandler.Logout)
+		auth.POST("/link/confirm", localAuthHandler.ConfirmAccountLink)
 	}
 
 	// Authenticated endpoints

@@ -15,6 +15,19 @@ import (
 var ErrUserEmailNotVerified = errors.New("email is not verified")
 var ErrUserNotFound = errors.New("user not found")
 
+// LinkRequiredError is returned by SyncAuth0User when a Google identity's email
+// matches an existing local account. The middleware surfaces this as HTTP 409
+// with a short-lived pending_token. The client must call POST /auth/link/confirm
+// (with the user's local password) to complete the link.
+type LinkRequiredError struct {
+	GoogleSub string
+	Email     string
+}
+
+func (e *LinkRequiredError) Error() string {
+	return "account link required: explicit consent needed before linking identities"
+}
+
 type IUserService interface {
 	SyncAuth0User(auth0ID, email, displayName, avatarURL string, emailVerified bool) (*model.User, error)
 	GetByAuth0ID(auth0ID string) (*model.User, error)
@@ -69,25 +82,12 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 		return nil, errors.New("email is required for first login")
 	}
 
-	// Identity does not exist yet. Auto-link by verified email if an account exists.
+	// Email matches an existing local account — require explicit consent, never auto-link.
 	if existingByEmail, err := s.userRepo.FindByEmail(email); err == nil {
 		if !emailVerified {
 			return nil, ErrUserEmailNotVerified
 		}
-		if linkErr := s.userIdentityRepo.Create(&model.UserIdentity{
-			UserID:          existingByEmail.ID,
-			Provider:        provider,
-			ProviderSubject: auth0ID,
-			EmailAtLinkTime: email,
-			IsPrimary:       false,
-		}); linkErr != nil {
-			existingIdentity, findErr := s.userIdentityRepo.FindByProviderSubject(auth0ID)
-			if findErr != nil {
-				return nil, linkErr
-			}
-			return s.userRepo.FindByID(existingIdentity.UserID)
-		}
-		return existingByEmail, nil
+		return nil, &LinkRequiredError{GoogleSub: auth0ID, Email: existingByEmail.Email}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}

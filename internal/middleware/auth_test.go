@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,50 @@ func (m *mockUserServiceForMW) SyncAuth0User(auth0ID, email, displayName, avatar
 		return m.user, nil
 	}
 	return &model.User{ID: uuid.New()}, nil
+}
+
+func TestAuthMiddleware_Auth0_LinkRequired_Returns409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	secret := "test-secret-32-chars-minimum!!!!"
+
+	mw := &AuthMiddleware{
+		userService:    &mockUserServiceForMW{syncErr: &service.LinkRequiredError{GoogleSub: "google-oauth2|xyz", Email: "alice@example.com"}},
+		issuer:         "https://issuer/",
+		audience:       "aud",
+		jwksByK:        map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},
+		localJWTSecret: secret,
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{
+		"sub":            "google-oauth2|xyz",
+		"email":          "alice@example.com",
+		"email_verified": true,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "ACCOUNT_LINK_REQUIRED") {
+		t.Fatalf("expected ACCOUNT_LINK_REQUIRED in body, got: %s", body)
+	}
+	if !strings.Contains(body, "pending_token") {
+		t.Fatalf("expected pending_token in body, got: %s", body)
+	}
 }
 
 func (m *mockUserServiceForMW) GetByAuth0ID(auth0ID string) (*model.User, error) { return nil, nil }

@@ -12,6 +12,7 @@ import (
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	tokenrepo "github.com/Kash4299/todo-chat-app/internal/repository/token"
 	userrepo "github.com/Kash4299/todo-chat-app/internal/repository/user"
+	useridentityrepo "github.com/Kash4299/todo-chat-app/internal/repository/useridentity"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -19,12 +20,15 @@ import (
 )
 
 const LocalIssuer = "kashflow"
+const LinkIssuer = "kashflow-link"
 
 var ErrEmailTaken = errors.New("email already registered")
 var ErrInvalidCredentials = errors.New("invalid email or password")
 var ErrNoPasswordSet = errors.New("account has no password; log in with Google")
 var ErrPasswordAlreadySet = errors.New("password is already set; use change-password flow")
 var ErrPasswordTooShort = errors.New("password must be at least 8 characters")
+var ErrInvalidPendingToken = errors.New("invalid or expired pending link token")
+var ErrLinkConflict = errors.New("google identity is already linked to a different account")
 
 type TokenPair struct {
 	AccessToken  string `json:"access_token"`
@@ -37,30 +41,34 @@ type ILocalAuthService interface {
 	Refresh(rawRefreshToken string) (*TokenPair, error)
 	Logout(rawRefreshToken string) error
 	SetPassword(userID uuid.UUID, newPassword string) error
+	ConfirmAccountLink(pendingToken, password string) (*model.User, *TokenPair, error)
 }
 
 type LocalAuthService struct {
-	userRepo      userrepo.IUserRepository
-	tokenRepo     tokenrepo.IRefreshTokenRepository
-	jwtSecret     []byte
-	accessExpiry  time.Duration
-	refreshExpiry time.Duration
+	userRepo         userrepo.IUserRepository
+	tokenRepo        tokenrepo.IRefreshTokenRepository
+	userIdentityRepo useridentityrepo.IUserIdentityRepository
+	jwtSecret        []byte
+	accessExpiry     time.Duration
+	refreshExpiry    time.Duration
 }
 
 func NewLocalAuthService(
 	userRepo userrepo.IUserRepository,
 	tokenRepo tokenrepo.IRefreshTokenRepository,
+	userIdentityRepo useridentityrepo.IUserIdentityRepository,
 	cfg *config.Config,
 ) (ILocalAuthService, error) {
 	if strings.TrimSpace(cfg.JWTSecret) == "" {
 		return nil, errors.New("JWT_SECRET is required for local auth")
 	}
 	return &LocalAuthService{
-		userRepo:      userRepo,
-		tokenRepo:     tokenRepo,
-		jwtSecret:     []byte(cfg.JWTSecret),
-		accessExpiry:  time.Duration(cfg.JWTAccessExpiryMin) * time.Minute,
-		refreshExpiry: time.Duration(cfg.JWTRefreshExpiryDay) * 24 * time.Hour,
+		userRepo:         userRepo,
+		tokenRepo:        tokenRepo,
+		userIdentityRepo: userIdentityRepo,
+		jwtSecret:        []byte(cfg.JWTSecret),
+		accessExpiry:     time.Duration(cfg.JWTAccessExpiryMin) * time.Minute,
+		refreshExpiry:    time.Duration(cfg.JWTRefreshExpiryDay) * 24 * time.Hour,
 	}, nil
 }
 
@@ -153,6 +161,78 @@ func (s *LocalAuthService) Refresh(rawRefreshToken string) (*TokenPair, error) {
 func (s *LocalAuthService) Logout(rawRefreshToken string) error {
 	_ = s.tokenRepo.DeleteByHash(hashToken(rawRefreshToken))
 	return nil
+}
+
+func (s *LocalAuthService) ConfirmAccountLink(pendingToken, password string) (*model.User, *TokenPair, error) {
+	token, err := jwt.Parse(pendingToken, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return s.jwtSecret, nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !token.Valid {
+		return nil, nil, ErrInvalidPendingToken
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, nil, ErrInvalidPendingToken
+	}
+	iss, _ := claims["iss"].(string)
+	if iss != LinkIssuer {
+		return nil, nil, ErrInvalidPendingToken
+	}
+	googleSub, _ := claims["sub"].(string)
+	email, _ := claims["email"].(string)
+	if googleSub == "" || email == "" {
+		return nil, nil, ErrInvalidPendingToken
+	}
+
+	user, err := s.userRepo.FindByEmail(email)
+	if err != nil {
+		return nil, nil, ErrInvalidPendingToken
+	}
+	if user == nil || user.ID == uuid.Nil {
+		return nil, nil, ErrInvalidPendingToken
+	}
+
+	if user.PasswordHash == nil {
+		return nil, nil, ErrNoPasswordSet
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)); err != nil {
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	provider, err := providerFromSubject(googleSub)
+	if err != nil {
+		return nil, nil, ErrInvalidPendingToken
+	}
+
+	linkErr := s.userIdentityRepo.Create(&model.UserIdentity{
+		UserID:          user.ID,
+		Provider:        provider,
+		ProviderSubject: googleSub,
+		EmailAtLinkTime: email,
+		IsPrimary:       false,
+	})
+	if linkErr != nil {
+		existing, findErr := s.userIdentityRepo.FindByProviderSubject(googleSub)
+		if findErr != nil {
+			return nil, nil, linkErr
+		}
+		if existing == nil || existing.UserID == uuid.Nil {
+			return nil, nil, linkErr
+		}
+		if existing.UserID != user.ID {
+			return nil, nil, ErrLinkConflict
+		}
+	}
+
+	pair, err := s.issueTokenPair(user.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return user, pair, nil
 }
 
 func (s *LocalAuthService) SetPassword(userID uuid.UUID, newPassword string) error {

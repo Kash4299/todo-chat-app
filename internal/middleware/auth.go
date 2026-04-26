@@ -122,6 +122,19 @@ func (m *AuthMiddleware) handleAuth0Token(c *gin.Context, claims jwt.MapClaims) 
 		})
 		return
 	}
+	var linkRequired *service.LinkRequiredError
+	if errors.As(err, &linkRequired) {
+		pendingToken, tokenErr := m.issuePendingLinkToken(linkRequired.GoogleSub, linkRequired.Email)
+		if tokenErr != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"code":          "ACCOUNT_LINK_REQUIRED",
+			"pending_token": pendingToken,
+		})
+		return
+	}
 	if err != nil || user == nil || user.ID == uuid.Nil {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user identity not recognized"})
 		return
@@ -184,6 +197,16 @@ func (m *AuthMiddleware) keyFunc(token *jwt.Token) (any, error) {
 		return nil, fmt.Errorf("local JWT not configured")
 	}
 	return []byte(m.localJWTSecret), nil
+}
+
+func (m *AuthMiddleware) issuePendingLinkToken(googleSub, email string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":   googleSub,
+		"email": email,
+		"iss":   service.LinkIssuer,
+		"exp":   time.Now().Add(10 * time.Minute).Unix(),
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(m.localJWTSecret))
 }
 
 func (m *AuthMiddleware) lookupKey(kid string) *rsa.PublicKey {

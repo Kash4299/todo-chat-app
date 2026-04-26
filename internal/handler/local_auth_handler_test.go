@@ -21,6 +21,7 @@ type mockLocalAuthService struct {
 	loginErr        error
 	refreshErr      error
 	setPasswordErr  error
+	confirmLinkErr  error
 	user            *model.User
 	pair            *service.TokenPair
 }
@@ -70,6 +71,21 @@ func (m *mockLocalAuthService) Logout(rawRefreshToken string) error { return nil
 
 func (m *mockLocalAuthService) SetPassword(userID uuid.UUID, newPassword string) error {
 	return m.setPasswordErr
+}
+
+func (m *mockLocalAuthService) ConfirmAccountLink(pendingToken, password string) (*model.User, *service.TokenPair, error) {
+	if m.confirmLinkErr != nil {
+		return nil, nil, m.confirmLinkErr
+	}
+	u := m.user
+	if u == nil {
+		u = &model.User{ID: uuid.New()}
+	}
+	p := m.pair
+	if p == nil {
+		p = &service.TokenPair{AccessToken: "access", RefreshToken: "refresh"}
+	}
+	return u, p, nil
 }
 
 // ── Tests: Register ───────────────────────────────────────────────────────────
@@ -300,6 +316,92 @@ func TestLocalAuthHandler_SetPassword_NoAuthContext(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// ── Tests: ConfirmAccountLink ─────────────────────────────────────────────────
+
+func TestLocalAuthHandler_ConfirmAccountLink_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"pending_token":"some-token","password":"password123"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/link/confirm", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ConfirmAccountLink(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLocalAuthHandler_ConfirmAccountLink_InvalidToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrInvalidPendingToken})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"pending_token":"bad","password":"password123"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/link/confirm", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ConfirmAccountLink(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_ConfirmAccountLink_WrongPassword(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrInvalidCredentials})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"pending_token":"tok","password":"wrong"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/link/confirm", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ConfirmAccountLink(c)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_ConfirmAccountLink_Conflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrLinkConflict})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"pending_token":"tok","password":"password123"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/link/confirm", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ConfirmAccountLink(c)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_ConfirmAccountLink_BadJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/link/confirm", bytes.NewReader([]byte(`not-json`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ConfirmAccountLink(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 

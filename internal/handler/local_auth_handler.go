@@ -118,6 +118,39 @@ func (h *LocalAuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
+type confirmLinkRequest struct {
+	PendingToken string `json:"pending_token" binding:"required"`
+	Password     string `json:"password" binding:"required"`
+}
+
+func (h *LocalAuthHandler) ConfirmAccountLink(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	var req confirmLinkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	user, pair, err := h.service.ConfirmAccountLink(req.PendingToken, req.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidPendingToken):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired link token"})
+		case errors.Is(err, service.ErrInvalidCredentials):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
+		case errors.Is(err, service.ErrNoPasswordSet):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "this account uses Google login only; no local password is set"})
+		case errors.Is(err, service.ErrLinkConflict):
+			c.JSON(http.StatusConflict, gin.H{"error": "google identity is already linked to a different account"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"user": user, "tokens": pair})
+}
+
 func (h *LocalAuthHandler) SetPassword(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 	userIDVal, exists := c.Get(middleware.UserIDContextKey)
