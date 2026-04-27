@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
+	"github.com/Kash4299/todo-chat-app/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -53,23 +53,23 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 	channelIDStr := c.Param("channelID")
 	channelID, err := uuid.Parse(channelIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		response.BadRequest(c, response.CodeInvalidInput, "invalid channel id")
 		return
 	}
 
 	userIDVal, exists := c.Get(middleware.UserIDContextKey)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
 		return
 	}
 	userID, ok := userIDVal.(uuid.UUID)
 	if !ok || userID == uuid.Nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user identity"})
+		response.Unauthorized(c, response.CodeUnauthorized, "invalid user identity")
 		return
 	}
 
 	if !h.isOriginAllowed(c.Request.Header.Get("Origin")) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "origin not allowed"})
+		response.Forbidden(c)
 		return
 	}
 

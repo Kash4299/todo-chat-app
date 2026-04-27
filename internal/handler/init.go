@@ -9,4 +9,5 @@ var Module = fx.Options(
 	fx.Provide(NewLocalAuthHandler),
 	fx.Provide(NewTaskHandler),
 	fx.Provide(NewChatHandler),
+	fx.Provide(NewWorkspaceHandler),
 )

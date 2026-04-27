@@ -21,6 +21,7 @@ func main() {
 		fx.Provide(
 			database.NewPostgresDB,
 			database.NewRedisClient,
+			database.NewTxManager,
 			kafka.NewKafkaClient,
 			server.NewGinEngine,
 		),

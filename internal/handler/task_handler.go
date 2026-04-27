@@ -2,12 +2,12 @@ package handler
 
 import (
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
+	"github.com/Kash4299/todo-chat-app/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -29,24 +29,22 @@ type createTaskRequest struct {
 }
 
 func (h *TaskHandler) Create(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
-
 	var req createTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		response.BadRequest(c, response.CodeInvalidInput, "invalid request body")
 		return
 	}
 
 	workspaceID, err := uuid.Parse(req.WorkspaceID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace_id"})
+		response.BadRequest(c, response.CodeInvalidInput, "invalid workspace_id")
 		return
 	}
 
 	userIDVal, _ := c.Get(middleware.UserIDContextKey)
 	creatorID, ok := userIDVal.(uuid.UUID)
 	if !ok || creatorID == uuid.Nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
 		return
 	}
 
@@ -60,63 +58,59 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	if req.DueDate != "" {
 		t, err := time.Parse(time.RFC3339, req.DueDate)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "due_date must be RFC3339 format"})
+			response.BadRequest(c, response.CodeInvalidInput, "due_date must be RFC3339 format")
 			return
 		}
 		task.DueDate = &t
 	}
 
 	if err := h.service.Create(creatorID, task); err != nil {
-		if errors.Is(err, service.ErrTaskForbidden) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-			return
+		switch {
+		case errors.Is(err, service.ErrTaskForbidden):
+			response.Forbidden(c)
+		case errors.Is(err, service.ErrTaskInvalidInput):
+			response.BadRequest(c, response.CodeInvalidInput, "invalid task input")
+		default:
+			response.InternalError(c)
 		}
-		if errors.Is(err, service.ErrTaskInvalidInput) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task input"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, task)
+	response.Created(c, task)
 }
 
 func (h *TaskHandler) GetByID(c *gin.Context) {
 	userIDVal, exists := c.Get(middleware.UserIDContextKey)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
 		return
 	}
 	requesterID, ok := userIDVal.(uuid.UUID)
 	if !ok || requesterID == uuid.Nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user identity"})
+		response.Unauthorized(c, response.CodeUnauthorized, "invalid user identity")
 		return
 	}
 
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		response.BadRequest(c, response.CodeInvalidInput, "invalid task id")
 		return
 	}
 
 	task, err := h.service.GetByID(requesterID, id)
 	if err != nil {
-		if errors.Is(err, service.ErrTaskForbidden) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-			return
+		switch {
+		case errors.Is(err, service.ErrTaskInvalidInput):
+			response.BadRequest(c, response.CodeInvalidInput, "invalid task input")
+		case errors.Is(err, service.ErrTaskForbidden):
+			response.Forbidden(c)
+		case errors.Is(err, service.ErrTaskNotFound):
+			response.NotFound(c, response.CodeNotFound, "task not found")
+		default:
+			response.InternalError(c)
 		}
-		if errors.Is(err, service.ErrTaskInvalidInput) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
-			return
-		}
-		if errors.Is(err, service.ErrTaskNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
-			return
-		}
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, task)
+	response.OK(c, task)
 }

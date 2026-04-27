@@ -260,8 +260,8 @@ func TestLocalAuthHandler_Logout_Success(t *testing.T) {
 
 	h.Logout(c)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
 	}
 }
 
@@ -280,8 +280,8 @@ func TestLocalAuthHandler_SetPassword_Success(t *testing.T) {
 
 	h.SetPassword(c)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

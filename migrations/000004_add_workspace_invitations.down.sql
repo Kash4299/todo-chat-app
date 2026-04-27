@@ -1,0 +1,1 @@
+DROP TABLE IF exists workspace_invitations cascade;

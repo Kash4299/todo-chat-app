@@ -12,6 +12,7 @@ func SetupRoutes(
 	localAuthHandler *handler.LocalAuthHandler,
 	taskHandler *handler.TaskHandler,
 	chatHandler *handler.ChatHandler,
+	workspaceHandler *handler.WorkspaceHandler,
 	authMiddleware *middleware.AuthMiddleware,
 ) {
 	r.GET("/ping", func(c *gin.Context) {
@@ -19,6 +20,7 @@ func SetupRoutes(
 	})
 
 	api := r.Group("/api/v1")
+	api.Use(middleware.MaxBodySize(1 << 20))
 
 	// Public webhook endpoints
 	webhooks := api.Group("/webhooks")
@@ -47,6 +49,14 @@ func SetupRoutes(
 		{
 			tasks.POST("", taskHandler.Create)
 			tasks.GET("/:id", taskHandler.GetByID)
+		}
+
+		workspaces := protected.Group("/workspaces")
+		{
+			workspaces.GET("", workspaceHandler.ListByUser)
+			workspaces.GET("/:id", workspaceHandler.GetByID)
+			workspaces.POST("", workspaceHandler.Create)
+			workspaces.DELETE("/:id", workspaceHandler.Delete)
 		}
 
 		ws := protected.Group("/ws")

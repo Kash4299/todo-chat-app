@@ -7,6 +7,8 @@ import (
 	"github.com/Kash4299/todo-chat-app/internal/repository/token"
 	"github.com/Kash4299/todo-chat-app/internal/repository/user"
 	"github.com/Kash4299/todo-chat-app/internal/repository/useridentity"
+	"github.com/Kash4299/todo-chat-app/internal/repository/workspace"
+	"github.com/Kash4299/todo-chat-app/internal/repository/workspaceinvitation"
 	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"go.uber.org/fx"
 )
@@ -19,5 +21,7 @@ var Module = fx.Options(
 	// token repo is reserved for Spotify OAuth token storage (T59); not consumed by any service yet
 	fx.Provide(token.NewRefreshTokenRepository),
 	fx.Provide(useridentity.NewUserIdentityRepository),
+	fx.Provide(workspace.NewWorkspaceRepository),
+	fx.Provide(workspaceinvitation.NewWorkspaceInvitationRepository),
 	fx.Provide(workspacemember.NewWorkspaceMemberRepository),
 )

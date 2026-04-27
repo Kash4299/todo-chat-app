@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Kash4299/todo-chat-app/internal/model"
+	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -49,8 +50,20 @@ type mockWorkspaceMemberRepo struct {
 	err      error
 }
 
+func (m *mockWorkspaceMemberRepo) WithTx(_ *gorm.DB) workspacemember.IWorkspaceMemberRepository {
+	return m
+}
+
 func (m *mockWorkspaceMemberRepo) IsMember(workspaceID, userID uuid.UUID) (bool, error) {
 	return m.isMember, m.err
+}
+
+func (m *mockWorkspaceMemberRepo) AddMember(workspaceID, userID uuid.UUID, role string) error {
+	return m.err
+}
+
+func (m *mockWorkspaceMemberRepo) GetRole(workspaceID, userID uuid.UUID) (string, error) {
+	return "", m.err
 }
 
 func TestTaskService_CreateRejectsInvalidInput(t *testing.T) {

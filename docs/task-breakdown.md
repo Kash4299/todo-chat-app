@@ -133,6 +133,26 @@
 
 ---
 
+## EPIC 9 — End-to-End Encryption / E2EE (22 SP)
+
+> Approach: Signal Protocol (Messenger-style) — chi tiết xem `docs/e2ee-plan.md`
+> Prerequisite: Frontend hoàn thiện + core app ổn định (sau Sprint 13)
+
+| ID | Task Name | Description | SP | Dependencies | Risk | Ghi chú |
+|---|---|---|---|---|---|---|
+| T61 | DB schema: user_key_bundles + user_one_time_prekeys | Lưu public keys của từng device | 1 | T01 | 🟢 | Private keys không bao giờ lên server |
+| T62 | Key management API (upload bundle, fetch bundle, replenish OPKs) | Server relay public keys, không xử lý crypto | 2 | T61 | 🟢 | GET /users/:id/keys, POST /users/me/keys |
+| T63 | Message schema changes (is_encrypted, sender_device_id) | Disable search_vector cho encrypted messages | 1 | T16, T61 | 🟡 | Search không hoạt động với E2EE messages |
+| T64 | Frontend: libsignal setup + keystore (IndexedDB + WebCrypto) | Private keys lưu trên device, không rời browser | 3 | T62 | 🔴 | Dùng @signalapp/libsignal-client, không tự implement |
+| T65 | Frontend: X3DH initial key exchange | Alice fetch Bob's key bundle → derive shared secret | 3 | T64 | 🔴 | Sai X3DH = toàn bộ session insecure |
+| T66 | Frontend: Double Ratchet integration | Forward secrecy cho ongoing messages | 3 | T65 | 🔴 | Mỗi message dùng key mới |
+| T67 | DM E2EE — opt-in phase | Chỉ DM mới tạo sau ngày X mới encrypted | 2 | T66, T15 | 🟡 | Existing DMs giữ nguyên plaintext |
+| T68 | Group E2EE — Sender Keys | Một Sender Key per group, distribute qua X3DH | 3 | T66 | 🔴 | Phức tạp hơn DM, member join/leave cần re-key |
+| T69 | Client-side search (replace server search cho E2EE channels) | Index encrypted messages locally trên device | 2 | T67 | 🟡 | Server không thể search ciphertext |
+| T70 | Security audit + penetration testing | Bắt buộc trước khi ship E2EE ra production | 2 | T67, T68 | 🔴 | Không audit = không ship |
+
+---
+
 ## Tổng kết
 
 | Epic | Story Points | Ưu tiên |
@@ -145,9 +165,10 @@
 | EPIC 4 — Search | 8 SP | P2 |
 | EPIC 7 — Notifications | 7 SP | P2 |
 | EPIC 8 — Integrations | 7 SP | P3 — Nice-to-have |
-| **TOTAL** | **104 SP** | |
+| EPIC 9 — E2EE Encryption | 22 SP | P3 — Sau Sprint 13, frontend required |
+| **TOTAL** | **126 SP** | |
 
-> **Lưu ý thực tế**: Với TDD (viết test trước), mỗi task thực tế tốn ~1.5x. Tổng thực tế ≈ **150-160 ngày làm việc**.
+> **Lưu ý thực tế**: Với TDD (viết test trước), mỗi task thực tế tốn ~1.5x. Tổng thực tế ≈ **185-200 ngày làm việc**.
 > Với 4-6 tiếng/ngày, nên ưu tiên P0 tasks để có demo được trước tháng 6, P1-P2 hoàn thiện trước tháng 8.
 
 ---
@@ -169,3 +190,7 @@
 | Sprint 11 | T49, T50, T51, T52 | AWS deployment |
 | Sprint 12 | T53, T54, T55, T56, T57 | Notifications |
 | Sprint 13 | T58, T59, T60 | Integrations (stretch goal) |
+| Sprint 14 | T61, T62, T63 | E2EE: backend schema + key API |
+| Sprint 15 | T64, T65, T66 | E2EE: frontend libsignal + X3DH + Double Ratchet |
+| Sprint 16 | T67, T68 | E2EE: DM + Group encryption |
+| Sprint 17 | T69, T70 | E2EE: client-side search + security audit |
