@@ -26,6 +26,9 @@ type mockUserRepo struct {
 	updateErr       error
 	updateFn        func(user *model.User) error
 	updateCalls     int
+	deleteErr       error
+	deleteFn        func(id uuid.UUID) error
+	deleteCalls     int
 }
 
 func (m *mockUserRepo) Create(user *model.User) error {
@@ -54,6 +57,14 @@ func (m *mockUserRepo) Update(user *model.User) error {
 	}
 	m.updateCalls++
 	return m.updateErr
+}
+
+func (m *mockUserRepo) DeleteByID(id uuid.UUID) error {
+	if m.deleteFn != nil {
+		return m.deleteFn(id)
+	}
+	m.deleteCalls++
+	return m.deleteErr
 }
 
 type mockUserIdentityRepo struct {
@@ -144,6 +155,23 @@ func TestUserService_SyncAuth0User_UpdatesExistingUser(t *testing.T) {
 	}
 	if user.Email != "new@example.com" || user.DisplayName != "New Name" || user.AvatarURL != "https://img" {
 		t.Fatal("expected existing user fields to be updated")
+	}
+}
+
+func TestUserService_SyncAuth0User_RejectsUnverifiedExistingIdentity(t *testing.T) {
+	existing := &model.User{ID: uuid.New(), Email: "old@example.com"}
+	userRepo := &mockUserRepo{findByIDUser: existing}
+	identityRepo := &mockUserIdentityRepo{
+		findBySubjectIdentity: &model.UserIdentity{UserID: existing.ID},
+	}
+	svc := service.NewUserService(userRepo, identityRepo)
+
+	_, err := svc.SyncAuth0User("auth0|abc", "old@example.com", "Old", "", false)
+	if !errors.Is(err, service.ErrUserEmailNotVerified) {
+		t.Fatalf("expected ErrUserEmailNotVerified, got %v", err)
+	}
+	if userRepo.updateCalls != 0 {
+		t.Fatalf("expected no profile update, got %d", userRepo.updateCalls)
 	}
 }
 
@@ -250,6 +278,20 @@ func TestUserService_SyncAuth0User_ExistingIdentityUserLookupFails(t *testing.T)
 	_, err := svc.SyncAuth0User("auth0|x", "x@example.com", "", "", true)
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected %v, got %v", expected, err)
+	}
+}
+
+func TestUserService_SyncAuth0User_RejectsUnverifiedEmailForNewUser(t *testing.T) {
+	userRepo := &mockUserRepo{findByEmailErr: gorm.ErrRecordNotFound}
+	identityRepo := &mockUserIdentityRepo{findBySubjectErr: gorm.ErrRecordNotFound}
+	svc := service.NewUserService(userRepo, identityRepo)
+
+	_, err := svc.SyncAuth0User("auth0|abc", "test@yopmail.com", "Test", "", false)
+	if !errors.Is(err, service.ErrUserEmailNotVerified) {
+		t.Fatalf("expected ErrUserEmailNotVerified for new user with unverified email, got %v", err)
+	}
+	if userRepo.createCalls != 0 {
+		t.Fatal("expected no user created when email is not verified")
 	}
 }
 

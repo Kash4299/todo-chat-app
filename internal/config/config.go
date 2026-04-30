@@ -34,6 +34,13 @@ type Config struct {
 	JWTRefreshExpiryDay int
 
 	AllowedOrigins string
+
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	AppBaseURL   string
 }
 
 func NewConfig() *Config {
@@ -68,6 +75,13 @@ func NewConfig() *Config {
 		JWTRefreshExpiryDay: getEnvAsInt("JWT_REFRESH_EXPIRY_DAY", 7),
 
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
+
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     getEnv("SMTP_PORT", ""),
+		SMTPUser:     getEnv("SMTP_USER", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getEnv("SMTP_FROM", ""),
+		AppBaseURL:   getEnv("APP_BASE_URL", ""),
 	}
 }
 

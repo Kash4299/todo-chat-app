@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
@@ -17,28 +18,45 @@ import (
 // ── Mock ──────────────────────────────────────────────────────────────────────
 
 type mockLocalAuthService struct {
-	registerErr     error
-	loginErr        error
-	refreshErr      error
-	setPasswordErr  error
-	confirmLinkErr  error
-	user            *model.User
-	pair            *service.TokenPair
+	registerErr    error
+	resendErr      error
+	loginErr       error
+	refreshErr     error
+	setPasswordErr error
+	confirmLinkErr error
+	verifyEmailErr error
+	user           *model.User
+	pair           *service.TokenPair
 }
 
-func (m *mockLocalAuthService) Register(email, password, displayName string) (*model.User, *service.TokenPair, error) {
+func (m *mockLocalAuthService) Register(email, password, displayName string) (*model.User, error) {
 	if m.registerErr != nil {
-		return nil, nil, m.registerErr
+		return nil, m.registerErr
 	}
 	u := m.user
 	if u == nil {
 		u = &model.User{ID: uuid.New(), Email: email}
+	}
+	return u, nil
+}
+
+func (m *mockLocalAuthService) VerifyEmail(rawToken string) (*model.User, *service.TokenPair, error) {
+	if m.verifyEmailErr != nil {
+		return nil, nil, m.verifyEmailErr
+	}
+	u := m.user
+	if u == nil {
+		u = &model.User{ID: uuid.New()}
 	}
 	p := m.pair
 	if p == nil {
 		p = &service.TokenPair{AccessToken: "access", RefreshToken: "refresh"}
 	}
 	return u, p, nil
+}
+
+func (m *mockLocalAuthService) ResendVerification(email string) error {
+	return m.resendErr
 }
 
 func (m *mockLocalAuthService) Login(email, password string) (*model.User, *service.TokenPair, error) {
@@ -87,6 +105,12 @@ func (m *mockLocalAuthService) ConfirmAccountLink(pendingToken, password string)
 	}
 	return u, p, nil
 }
+
+// Compile-time: ensure mock satisfies interface
+var _ service.ILocalAuthService = (*mockLocalAuthService)(nil)
+
+// Ensure errors package is used
+var _ = errors.New
 
 // ── Tests: Register ───────────────────────────────────────────────────────────
 
@@ -157,6 +181,144 @@ func TestLocalAuthHandler_Register_BadJSON(t *testing.T) {
 	}
 }
 
+// ── Tests: VerifyEmail ────────────────────────────────────────────────────────
+
+func TestLocalAuthHandler_VerifyEmail_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"token":"valid-raw-token"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify-email", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.VerifyEmail(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLocalAuthHandler_VerifyEmail_InvalidToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{verifyEmailErr: service.ErrInvalidVerificationToken})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"token":"bad-token"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify-email", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.VerifyEmail(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_VerifyEmail_BadJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify-email", bytes.NewReader([]byte(`not-json`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.VerifyEmail(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_VerifyEmail_BodyTooLarge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	oversized := `{"token":"` + strings.Repeat("a", 1<<20) + `"}`
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify-email", bytes.NewReader([]byte(oversized)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.VerifyEmail(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for oversized body, got %d", w.Code)
+	}
+}
+
+// ── Tests: ResendVerification ────────────────────────────────────────────────
+
+func TestLocalAuthHandler_ResendVerification_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"email":"a@example.com"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/resend-verification", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ResendVerification(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLocalAuthHandler_ResendVerification_BadJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/resend-verification", bytes.NewReader([]byte(`not-json`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ResendVerification(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_ResendVerification_ServiceError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{resendErr: errors.New("smtp failed")})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"email":"a@example.com"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/resend-verification", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ResendVerification(c)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_ResendVerification_RateLimited(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{resendErr: service.ErrVerificationEmailRateLimited})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"email":"a@example.com"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/resend-verification", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.ResendVerification(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
 // ── Tests: Login ──────────────────────────────────────────────────────────────
 
 func TestLocalAuthHandler_Login_Success(t *testing.T) {
@@ -207,6 +369,23 @@ func TestLocalAuthHandler_Login_NoPassword(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestLocalAuthHandler_Login_EmailNotVerified(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: service.ErrEmailNotVerified})
+
+	w := httptest.NewRecorder()
+	body := []byte(`{"email":"a@example.com","password":"password123"}`)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.Login(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
 	}
 }
 
@@ -404,9 +583,3 @@ func TestLocalAuthHandler_ConfirmAccountLink_BadJSON(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
-
-// Compile-time: ensure mock satisfies interface
-var _ service.ILocalAuthService = (*mockLocalAuthService)(nil)
-
-// Ensure errors package is used
-var _ = errors.New

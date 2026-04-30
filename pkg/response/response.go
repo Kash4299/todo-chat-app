@@ -36,6 +36,7 @@ const (
 	CodePasswordAlreadySet ErrorCode = "PASSWORD_ALREADY_SET"
 	CodeTokenExpired       ErrorCode = "TOKEN_EXPIRED"
 	CodeTokenInvalid       ErrorCode = "TOKEN_INVALID"
+	CodeEmailNotVerified   ErrorCode = "EMAIL_NOT_VERIFIED"
 
 	// Workspace domain
 	CodeWorkspaceNotFound ErrorCode = "WORKSPACE_NOT_FOUND"
@@ -117,6 +118,10 @@ func Forbidden(c *gin.Context) {
 	c.JSON(http.StatusForbidden, errorResponse{
 		Error: errorDetail{CodeForbidden, "you do not have permission to perform this action"},
 	})
+}
+
+func ForbiddenCode(c *gin.Context, code ErrorCode, message string) {
+	c.JSON(http.StatusForbidden, errorResponse{Error: errorDetail{code, message}})
 }
 
 func NotFound(c *gin.Context, code ErrorCode, message string) {

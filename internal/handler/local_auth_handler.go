@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -46,6 +47,14 @@ type confirmLinkRequest struct {
 	Password     string `json:"password"      binding:"required"`
 }
 
+type verifyEmailRequest struct {
+	Token string `json:"token" binding:"required"`
+}
+
+type resendVerificationRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
 func (h *LocalAuthHandler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -53,7 +62,7 @@ func (h *LocalAuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, pair, err := h.service.Register(req.Email, req.Password, req.DisplayName)
+	user, err := h.service.Register(req.Email, req.Password, req.DisplayName)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrEmailTaken):
@@ -66,7 +75,55 @@ func (h *LocalAuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	response.Created(c, gin.H{"user": user, "tokens": pair})
+	response.Created(c, gin.H{
+		"user":    user,
+		"message": "verification email sent; please check your inbox",
+	})
+}
+
+func (h *LocalAuthHandler) VerifyEmail(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+
+	var req verifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid request body")
+		return
+	}
+
+	user, pair, err := h.service.VerifyEmail(req.Token)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidVerificationToken):
+			response.BadRequest(c, response.CodeTokenInvalid, "invalid or expired verification token")
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.OK(c, gin.H{"user": user, "tokens": pair})
+}
+
+func (h *LocalAuthHandler) ResendVerification(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+
+	var req resendVerificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid request body")
+		return
+	}
+
+	if err := h.service.ResendVerification(req.Email); err != nil {
+		switch {
+		case errors.Is(err, service.ErrVerificationEmailRateLimited):
+			response.OK(c, gin.H{"message": "if the account exists and is unverified, a verification email has been sent"})
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.OK(c, gin.H{"message": "if the account exists and is unverified, a verification email has been sent"})
 }
 
 func (h *LocalAuthHandler) Login(c *gin.Context) {
@@ -83,6 +140,8 @@ func (h *LocalAuthHandler) Login(c *gin.Context) {
 			response.Unauthorized(c, response.CodeInvalidCredentials, "invalid email or password")
 		case errors.Is(err, service.ErrNoPasswordSet):
 			response.Unauthorized(c, response.CodeInvalidCredentials, "this account uses Google login; no password is set")
+		case errors.Is(err, service.ErrEmailNotVerified):
+			response.ForbiddenCode(c, response.CodeEmailNotVerified, "email not verified; please check your inbox")
 		default:
 			response.InternalError(c)
 		}

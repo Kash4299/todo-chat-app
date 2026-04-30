@@ -32,6 +32,8 @@ func SetupRoutes(
 	auth := api.Group("/auth")
 	{
 		auth.POST("/register", localAuthHandler.Register)
+		auth.POST("/verify-email", localAuthHandler.VerifyEmail)
+		auth.POST("/resend-verification", localAuthHandler.ResendVerification)
 		auth.POST("/login", localAuthHandler.Login)
 		auth.POST("/refresh", localAuthHandler.Refresh)
 		auth.POST("/logout", localAuthHandler.Logout)

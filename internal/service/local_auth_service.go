@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
 	"github.com/Kash4299/todo-chat-app/internal/model"
+	emailverificationrepo "github.com/Kash4299/todo-chat-app/internal/repository/emailverification"
 	tokenrepo "github.com/Kash4299/todo-chat-app/internal/repository/token"
 	userrepo "github.com/Kash4299/todo-chat-app/internal/repository/user"
 	useridentityrepo "github.com/Kash4299/todo-chat-app/internal/repository/useridentity"
@@ -22,6 +24,9 @@ import (
 const LocalIssuer = "kashflow"
 const LinkIssuer = "kashflow-link"
 
+const verificationTokenExpiry = 24 * time.Hour
+const resendVerificationCooldown = 1 * time.Minute
+
 var ErrEmailTaken = errors.New("email already registered")
 var ErrInvalidCredentials = errors.New("invalid email or password")
 var ErrNoPasswordSet = errors.New("account has no password; log in with Google")
@@ -29,6 +34,9 @@ var ErrPasswordAlreadySet = errors.New("password is already set; use change-pass
 var ErrPasswordTooShort = errors.New("password must be at least 8 characters")
 var ErrInvalidPendingToken = errors.New("invalid or expired pending link token")
 var ErrLinkConflict = errors.New("google identity is already linked to a different account")
+var ErrEmailNotVerified = errors.New("email not verified; please check your inbox")
+var ErrInvalidVerificationToken = errors.New("invalid or expired verification token")
+var ErrVerificationEmailRateLimited = errors.New("verification email sent recently; please wait before requesting another")
 
 type TokenPair struct {
 	AccessToken  string `json:"access_token"`
@@ -36,8 +44,10 @@ type TokenPair struct {
 }
 
 type ILocalAuthService interface {
-	Register(email, password, displayName string) (*model.User, *TokenPair, error)
+	Register(email, password, displayName string) (*model.User, error)
+	ResendVerification(email string) error
 	Login(email, password string) (*model.User, *TokenPair, error)
+	VerifyEmail(rawToken string) (*model.User, *TokenPair, error)
 	Refresh(rawRefreshToken string) (*TokenPair, error)
 	Logout(rawRefreshToken string) error
 	SetPassword(userID uuid.UUID, newPassword string) error
@@ -45,73 +55,115 @@ type ILocalAuthService interface {
 }
 
 type LocalAuthService struct {
-	userRepo         userrepo.IUserRepository
-	tokenRepo        tokenrepo.IRefreshTokenRepository
-	userIdentityRepo useridentityrepo.IUserIdentityRepository
-	jwtSecret        []byte
-	accessExpiry     time.Duration
-	refreshExpiry    time.Duration
+	userRepo              userrepo.IUserRepository
+	tokenRepo             tokenrepo.IRefreshTokenRepository
+	userIdentityRepo      useridentityrepo.IUserIdentityRepository
+	emailVerificationRepo emailverificationrepo.IEmailVerificationRepository
+	emailService          IEmailService
+	jwtSecret             []byte
+	accessExpiry          time.Duration
+	refreshExpiry         time.Duration
 }
 
 func NewLocalAuthService(
 	userRepo userrepo.IUserRepository,
 	tokenRepo tokenrepo.IRefreshTokenRepository,
 	userIdentityRepo useridentityrepo.IUserIdentityRepository,
+	emailVerificationRepo emailverificationrepo.IEmailVerificationRepository,
+	emailService IEmailService,
 	cfg *config.Config,
 ) (ILocalAuthService, error) {
 	if strings.TrimSpace(cfg.JWTSecret) == "" {
 		return nil, errors.New("JWT_SECRET is required for local auth")
 	}
 	return &LocalAuthService{
-		userRepo:         userRepo,
-		tokenRepo:        tokenRepo,
-		userIdentityRepo: userIdentityRepo,
-		jwtSecret:        []byte(cfg.JWTSecret),
-		accessExpiry:     time.Duration(cfg.JWTAccessExpiryMin) * time.Minute,
-		refreshExpiry:    time.Duration(cfg.JWTRefreshExpiryDay) * 24 * time.Hour,
+		userRepo:              userRepo,
+		tokenRepo:             tokenRepo,
+		userIdentityRepo:      userIdentityRepo,
+		emailVerificationRepo: emailVerificationRepo,
+		emailService:          emailService,
+		jwtSecret:             []byte(cfg.JWTSecret),
+		accessExpiry:          time.Duration(cfg.JWTAccessExpiryMin) * time.Minute,
+		refreshExpiry:         time.Duration(cfg.JWTRefreshExpiryDay) * 24 * time.Hour,
 	}, nil
 }
 
-func (s *LocalAuthService) Register(email, password, displayName string) (*model.User, *TokenPair, error) {
+func (s *LocalAuthService) Register(email, password, displayName string) (*model.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	displayName = strings.TrimSpace(displayName)
 
 	if email == "" {
-		return nil, nil, errors.New("email is required")
+		return nil, errors.New("email is required")
 	}
 	if len(password) < 8 {
-		return nil, nil, ErrPasswordTooShort
+		return nil, ErrPasswordTooShort
 	}
 	if displayName == "" {
 		displayName = email
 	}
 
 	if _, err := s.userRepo.FindByEmail(email); err == nil {
-		return nil, nil, ErrEmailTaken
+		return nil, ErrEmailTaken
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, err
+		return nil, err
 	}
 
 	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	hashStr := string(hashBytes)
 
 	user := &model.User{
-		Email:        email,
-		DisplayName:  displayName,
-		PasswordHash: &hashStr,
+		Email:         email,
+		DisplayName:   displayName,
+		PasswordHash:  &hashStr,
+		EmailVerified: false,
 	}
 	if err := s.userRepo.Create(user); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	pair, err := s.issueTokenPair(user.ID)
-	if err != nil {
-		return nil, nil, err
+	if err := s.sendVerificationEmail(user); err != nil {
+		if deleteErr := s.userRepo.DeleteByID(user.ID); deleteErr != nil {
+			return nil, fmt.Errorf("send verification email: %w; rollback user creation: %v", err, deleteErr)
+		}
+		return nil, err
 	}
-	return user, pair, nil
+
+	return user, nil
+}
+
+func (s *LocalAuthService) ResendVerification(email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return errors.New("email is required")
+	}
+
+	user, err := s.userRepo.FindByEmail(email)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if user == nil || user.ID == uuid.Nil {
+		return nil
+	}
+	if user.EmailVerified {
+		return nil
+	}
+
+	latest, err := s.emailVerificationRepo.FindLatestByUserID(user.ID)
+	if err == nil {
+		if latest != nil && time.Since(latest.CreatedAt) < resendVerificationCooldown {
+			return ErrVerificationEmailRateLimited
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	return s.sendVerificationEmail(user)
 }
 
 func (s *LocalAuthService) Login(email, password string) (*model.User, *TokenPair, error) {
@@ -131,6 +183,38 @@ func (s *LocalAuthService) Login(email, password string) (*model.User, *TokenPai
 
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)); err != nil {
 		return nil, nil, ErrInvalidCredentials
+	}
+
+	if !user.EmailVerified {
+		return nil, nil, ErrEmailNotVerified
+	}
+
+	pair, err := s.issueTokenPair(user.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return user, pair, nil
+}
+
+func (s *LocalAuthService) VerifyEmail(rawToken string) (*model.User, *TokenPair, error) {
+	hash := hashToken(rawToken)
+
+	userID, err := s.emailVerificationRepo.ConsumeValidByHash(hash, time.Now())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, ErrInvalidVerificationToken
+		}
+		return nil, nil, fmt.Errorf("consume verification token: %w", err)
+	}
+
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	user.EmailVerified = true
+	if err := s.userRepo.Update(user); err != nil {
+		return nil, nil, err
 	}
 
 	pair, err := s.issueTokenPair(user.ID)
@@ -228,6 +312,13 @@ func (s *LocalAuthService) ConfirmAccountLink(pendingToken, password string) (*m
 		}
 	}
 
+	if !user.EmailVerified {
+		user.EmailVerified = true
+		if err := s.userRepo.Update(user); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	pair, err := s.issueTokenPair(user.ID)
 	if err != nil {
 		return nil, nil, err
@@ -255,6 +346,25 @@ func (s *LocalAuthService) SetPassword(userID uuid.UUID, newPassword string) err
 	hashStr := string(hashBytes)
 	user.PasswordHash = &hashStr
 	return s.userRepo.Update(user)
+}
+
+func (s *LocalAuthService) sendVerificationEmail(user *model.User) error {
+	rawToken, err := generateRandomToken()
+	if err != nil {
+		return err
+	}
+
+	_ = s.emailVerificationRepo.DeleteByUserID(user.ID)
+
+	if err := s.emailVerificationRepo.Create(&model.EmailVerificationToken{
+		UserID:    user.ID,
+		TokenHash: hashToken(rawToken),
+		ExpiresAt: time.Now().Add(verificationTokenExpiry),
+	}); err != nil {
+		return err
+	}
+
+	return s.emailService.SendVerificationEmail(user.Email, rawToken)
 }
 
 func (s *LocalAuthService) issueTokenPair(userID uuid.UUID) (*TokenPair, error) {

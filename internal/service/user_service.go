@@ -62,6 +62,9 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 	if err != nil {
 		return nil, err
 	}
+	if !emailVerified {
+		return nil, ErrUserEmailNotVerified
+	}
 
 	identity, err := s.userIdentityRepo.FindByProviderSubject(auth0ID)
 	if err == nil {
@@ -84,9 +87,6 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 
 	// Email matches an existing local account — require explicit consent, never auto-link.
 	if existingByEmail, err := s.userRepo.FindByEmail(email); err == nil {
-		if !emailVerified {
-			return nil, ErrUserEmailNotVerified
-		}
 		return nil, &LinkRequiredError{GoogleSub: auth0ID, Email: existingByEmail.Email}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -97,9 +97,10 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 	}
 
 	newUser := &model.User{
-		Email:       email,
-		DisplayName: displayName,
-		AvatarURL:   avatarURL,
+		Email:         email,
+		DisplayName:   displayName,
+		AvatarURL:     avatarURL,
+		EmailVerified: true,
 	}
 	if err := s.userRepo.Create(newUser); err != nil {
 		// Concurrent create: fall back to the existing row.
