@@ -10,7 +10,7 @@ type TxManager struct {
 	db *gorm.DB
 }
 
-func NewTxManager(db *gorm.DB) *TxManager {
+func NewTxManager(db *gorm.DB) ITxManager {
 	return &TxManager{db: db}
 }
 

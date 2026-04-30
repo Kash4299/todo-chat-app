@@ -8,6 +8,7 @@ import (
 	"github.com/Kash4299/todo-chat-app/internal/server"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/Kash4299/todo-chat-app/pkg/database"
+	"github.com/Kash4299/todo-chat-app/pkg/email"
 	"github.com/Kash4299/todo-chat-app/pkg/kafka"
 	"go.uber.org/fx"
 )
@@ -22,6 +23,7 @@ func main() {
 			database.NewPostgresDB,
 			database.NewRedisClient,
 			database.NewTxManager,
+			email.NewSMTPConfig,
 			kafka.NewKafkaClient,
 			server.NewGinEngine,
 		),

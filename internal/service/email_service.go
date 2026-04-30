@@ -1,18 +1,11 @@
 package service
 
 import (
-	"crypto/tls"
 	"fmt"
-	"net"
-	"net/smtp"
-	"net/url"
 	"strings"
-	"time"
 
-	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/pkg/email"
 )
-
-const smtpTimeout = 10 * time.Second
 
 type IEmailService interface {
 	SendVerificationEmail(toEmail, rawToken string) error
@@ -27,33 +20,15 @@ type SMTPEmailService struct {
 	baseURL  string
 }
 
-func NewEmailService(cfg *config.Config) (IEmailService, error) {
-	host := strings.TrimSpace(cfg.SMTPHost)
-	port := strings.TrimSpace(cfg.SMTPPort)
-	user := strings.TrimSpace(cfg.SMTPUser)
-	password := strings.TrimSpace(cfg.SMTPPassword)
-	from := strings.TrimSpace(cfg.SMTPFrom)
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.AppBaseURL), "/")
-
-	if host == "" || port == "" || user == "" || password == "" || from == "" {
-		return nil, fmt.Errorf("SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM are required")
-	}
-	parsedBaseURL, err := url.Parse(baseURL)
-	if err != nil || parsedBaseURL.Scheme == "" || parsedBaseURL.Host == "" {
-		return nil, fmt.Errorf("APP_BASE_URL must be an absolute http or https URL")
-	}
-	if parsedBaseURL.Scheme != "http" && parsedBaseURL.Scheme != "https" {
-		return nil, fmt.Errorf("APP_BASE_URL must use http or https")
-	}
-
+func NewEmailService(cfg *email.SMTPConfig) IEmailService {
 	return &SMTPEmailService{
-		host:     host,
-		port:     port,
-		user:     user,
-		password: password,
-		from:     from,
-		baseURL:  baseURL,
-	}, nil
+		host:     cfg.Host,
+		port:     cfg.Port,
+		user:     cfg.User,
+		password: cfg.Password,
+		from:     cfg.From,
+		baseURL:  cfg.BaseURL,
+	}
 }
 
 func (s *SMTPEmailService) SendVerificationEmail(toEmail, rawToken string) error {
@@ -72,27 +47,19 @@ func (s *SMTPEmailService) SendVerificationEmail(toEmail, rawToken string) error
 
 	msg := buildMIMEMessage(s.from, toEmail, subject, body)
 
-	addr := s.host + ":" + s.port
-	auth := smtp.PlainAuth("", s.user, s.password, s.host)
-
-	tlsCfg := &tls.Config{ServerName: s.host, MinVersion: tls.VersionTLS12}
-	dialer := &net.Dialer{Timeout: smtpTimeout}
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(smtpTimeout))
-
-	client, err := smtp.NewClient(conn, s.host)
+	client, err := email.NewAuthenticatedSMTPClient(&email.SMTPConfig{
+		Host:     s.host,
+		Port:     s.port,
+		User:     s.user,
+		Password: s.password,
+		From:     s.from,
+		BaseURL:  s.baseURL,
+	})
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	if err := client.Auth(auth); err != nil {
-		return err
-	}
 	if err := client.Mail(s.from); err != nil {
 		return err
 	}

@@ -25,7 +25,7 @@ var (
 	reSlugDash    = regexp.MustCompile(`-{2,}`)
 )
 
-const slugSuffix = 7  // "-" + 6 random chars
+const slugSuffix = 7                 // "-" + 6 random chars
 const maxSlugBase = 100 - slugSuffix // 93 — keeps total within VARCHAR(100)
 
 // Input: "Hello! My  Team@" => Output: "hello-my-team-a3z9k2"
@@ -46,9 +46,6 @@ func generateSlug(name string) string {
 type IWorkspaceService interface {
 	Create(ownerID uuid.UUID, name string) (*model.Workspace, error)
 	GetByID(actorID, workspaceID uuid.UUID) (*model.Workspace, error)
-	// ListByUser returns a page of workspaces the user belongs to.
-	// page is 1-indexed. pageSize is clamped to [1, 100].
-	// Returns items, total count, and error.
 	ListByUser(userID uuid.UUID, page, pageSize int) ([]model.Workspace, int64, error)
 	Delete(actorID, workspaceID uuid.UUID) error
 }
