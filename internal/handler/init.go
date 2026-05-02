@@ -10,4 +10,5 @@ var Module = fx.Options(
 	fx.Provide(NewTaskHandler),
 	fx.Provide(NewChatHandler),
 	fx.Provide(NewWorkspaceHandler),
+	fx.Provide(NewWorkspaceInvitationHandler),
 )

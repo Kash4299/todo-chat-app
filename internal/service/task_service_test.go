@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -46,8 +47,12 @@ func (m *mockTaskRepo) Delete(id uuid.UUID) error {
 }
 
 type mockWorkspaceMemberRepo struct {
-	isMember bool
-	err      error
+	isMember         bool
+	role             string
+	err              error
+	addedWorkspaceID uuid.UUID
+	addedUserID      uuid.UUID
+	addedRole        string
 }
 
 func (m *mockWorkspaceMemberRepo) WithTx(_ *gorm.DB) workspacemember.IWorkspaceMemberRepository {
@@ -59,27 +64,30 @@ func (m *mockWorkspaceMemberRepo) IsMember(workspaceID, userID uuid.UUID) (bool,
 }
 
 func (m *mockWorkspaceMemberRepo) AddMember(workspaceID, userID uuid.UUID, role string) error {
+	m.addedWorkspaceID = workspaceID
+	m.addedUserID = userID
+	m.addedRole = role
 	return m.err
 }
 
 func (m *mockWorkspaceMemberRepo) GetRole(workspaceID, userID uuid.UUID) (string, error) {
-	return "", m.err
+	return m.role, m.err
 }
 
 func TestTaskService_CreateRejectsInvalidInput(t *testing.T) {
 	svc := service.NewTaskService(&mockTaskRepo{}, &mockWorkspaceMemberRepo{isMember: true})
 
 	err := svc.Create(uuid.Nil, &model.Task{WorkspaceID: uuid.New()})
-	if !errors.Is(err, service.ErrTaskInvalidInput) {
-		t.Fatalf("expected ErrTaskInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrTaskInvalidInput) {
+		t.Fatalf("expected constants.ErrTaskInvalidInput, got %v", err)
 	}
 }
 
 func TestTaskService_CreateRejectsNonMember(t *testing.T) {
 	svc := service.NewTaskService(&mockTaskRepo{}, &mockWorkspaceMemberRepo{isMember: false})
 	err := svc.Create(uuid.New(), &model.Task{WorkspaceID: uuid.New(), Title: "t"})
-	if !errors.Is(err, service.ErrTaskForbidden) {
-		t.Fatalf("expected ErrTaskForbidden, got %v", err)
+	if !errors.Is(err, constants.ErrForbidden) {
+		t.Fatalf("expected constants.ErrTaskForbidden, got %v", err)
 	}
 }
 
@@ -117,8 +125,8 @@ func TestTaskService_GetByIDRejectsForbidden(t *testing.T) {
 	}
 	svc := service.NewTaskService(repo, &mockWorkspaceMemberRepo{isMember: false})
 	_, err := svc.GetByID(uuid.New(), uuid.New())
-	if !errors.Is(err, service.ErrTaskForbidden) {
-		t.Fatalf("expected ErrTaskForbidden, got %v", err)
+	if !errors.Is(err, constants.ErrForbidden) {
+		t.Fatalf("expected constants.ErrTaskForbidden, got %v", err)
 	}
 }
 
@@ -126,8 +134,8 @@ func TestTaskService_GetByIDMapsNotFound(t *testing.T) {
 	repo := &mockTaskRepo{findByIDErr: gorm.ErrRecordNotFound}
 	svc := service.NewTaskService(repo, &mockWorkspaceMemberRepo{isMember: true})
 	_, err := svc.GetByID(uuid.New(), uuid.New())
-	if !errors.Is(err, service.ErrTaskNotFound) {
-		t.Fatalf("expected ErrTaskNotFound, got %v", err)
+	if !errors.Is(err, constants.ErrTaskNotFound) {
+		t.Fatalf("expected constants.ErrTaskNotFound, got %v", err)
 	}
 }
 
@@ -149,8 +157,8 @@ func TestTaskService_CreateRejectsInvalidPriority(t *testing.T) {
 		Title:       "x",
 		Priority:    "invalid",
 	})
-	if !errors.Is(err, service.ErrTaskInvalidInput) {
-		t.Fatalf("expected ErrTaskInvalidInput for bad priority, got %v", err)
+	if !errors.Is(err, constants.ErrTaskInvalidInput) {
+		t.Fatalf("expected constants.ErrTaskInvalidInput for bad priority, got %v", err)
 	}
 }
 
@@ -175,8 +183,8 @@ func TestTaskService_CreateUppercasesPriority(t *testing.T) {
 func TestTaskService_GetByIDRejectsInvalidInput(t *testing.T) {
 	svc := service.NewTaskService(&mockTaskRepo{}, &mockWorkspaceMemberRepo{isMember: true})
 	_, err := svc.GetByID(uuid.Nil, uuid.New())
-	if !errors.Is(err, service.ErrTaskInvalidInput) {
-		t.Fatalf("expected ErrTaskInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrTaskInvalidInput) {
+		t.Fatalf("expected constants.ErrTaskInvalidInput, got %v", err)
 	}
 }
 

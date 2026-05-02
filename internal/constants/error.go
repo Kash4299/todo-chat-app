@@ -1,0 +1,30 @@
+package constants
+
+import "errors"
+
+var (
+	ErrEmailTaken                       = errors.New("email already registered")
+	ErrInvalidCredentials               = errors.New("invalid email or password")
+	ErrNoPasswordSet                    = errors.New("account has no password; log in with Google")
+	ErrPasswordAlreadySet               = errors.New("password is already set; use change-password flow")
+	ErrPasswordTooShort                 = errors.New("password must be at least 8 characters")
+	ErrInvalidPendingToken              = errors.New("invalid or expired pending link token")
+	ErrLinkConflict                     = errors.New("google identity is already linked to a different account")
+	ErrEmailNotVerified                 = errors.New("email not verified; please check your inbox")
+	ErrInvalidVerificationToken         = errors.New("invalid or expired verification token")
+	ErrVerificationEmailRateLimited     = errors.New("verification email sent recently; please wait before requesting another")
+	ErrUserEmailNotVerified             = errors.New("email is not verified")
+	ErrUserNotFound                     = errors.New("user not found")
+	ErrForbidden                        = errors.New("forbidden")
+	ErrTaskNotFound                     = errors.New("task not found")
+	ErrTaskInvalidInput                 = errors.New("invalid task input")
+	ErrWorkspaceNotFound                = errors.New("workspace not found")
+	ErrWorkspaceInvalidInput            = errors.New("invalid workspace input")
+	ErrWorkspaceInvitationIsMember      = errors.New("inviter is already a member of the workspace")
+	ErrWorkspaceInvitationAlreadyExists = errors.New("an invitation for this email already exists")
+	ErrWorkspaceInvitationStillValid    = errors.New("invitation still valid")
+	ErrWorkspaceInvitationIsExpired     = errors.New("invitation is expired")
+	ErrWorkspaceInvitationNotAdmin      = errors.New("inviter is not a admin of the workspace")
+	ErrWorkspaceInvitationInvalidInput  = errors.New("invalid invitation input")
+	ErrWorkspaceInvitationEmailMismatch = errors.New("actor email does not match invitation email")
+)

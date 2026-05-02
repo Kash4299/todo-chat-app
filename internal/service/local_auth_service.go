@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	emailverificationrepo "github.com/Kash4299/todo-chat-app/internal/repository/emailverification"
 	tokenrepo "github.com/Kash4299/todo-chat-app/internal/repository/token"
@@ -26,17 +27,6 @@ const LinkIssuer = "kashflow-link"
 
 const verificationTokenExpiry = 24 * time.Hour
 const resendVerificationCooldown = 1 * time.Minute
-
-var ErrEmailTaken = errors.New("email already registered")
-var ErrInvalidCredentials = errors.New("invalid email or password")
-var ErrNoPasswordSet = errors.New("account has no password; log in with Google")
-var ErrPasswordAlreadySet = errors.New("password is already set; use change-password flow")
-var ErrPasswordTooShort = errors.New("password must be at least 8 characters")
-var ErrInvalidPendingToken = errors.New("invalid or expired pending link token")
-var ErrLinkConflict = errors.New("google identity is already linked to a different account")
-var ErrEmailNotVerified = errors.New("email not verified; please check your inbox")
-var ErrInvalidVerificationToken = errors.New("invalid or expired verification token")
-var ErrVerificationEmailRateLimited = errors.New("verification email sent recently; please wait before requesting another")
 
 type TokenPair struct {
 	AccessToken  string `json:"access_token"`
@@ -96,14 +86,14 @@ func (s *LocalAuthService) Register(email, password, displayName string) (*model
 		return nil, errors.New("email is required")
 	}
 	if len(password) < 8 {
-		return nil, ErrPasswordTooShort
+		return nil, constants.ErrPasswordTooShort
 	}
 	if displayName == "" {
 		displayName = email
 	}
 
 	if _, err := s.userRepo.FindByEmail(email); err == nil {
-		return nil, ErrEmailTaken
+		return nil, constants.ErrEmailTaken
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -157,7 +147,7 @@ func (s *LocalAuthService) ResendVerification(email string) error {
 	latest, err := s.emailVerificationRepo.FindLatestByUserID(user.ID)
 	if err == nil {
 		if latest != nil && time.Since(latest.CreatedAt) < resendVerificationCooldown {
-			return ErrVerificationEmailRateLimited
+			return constants.ErrVerificationEmailRateLimited
 		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -171,22 +161,22 @@ func (s *LocalAuthService) Login(email, password string) (*model.User, *TokenPai
 
 	user, err := s.userRepo.FindByEmail(email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, ErrInvalidCredentials
+		return nil, nil, constants.ErrInvalidCredentials
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if user.PasswordHash == nil {
-		return nil, nil, ErrNoPasswordSet
+		return nil, nil, constants.ErrNoPasswordSet
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)); err != nil {
-		return nil, nil, ErrInvalidCredentials
+		return nil, nil, constants.ErrInvalidCredentials
 	}
 
 	if !user.EmailVerified {
-		return nil, nil, ErrEmailNotVerified
+		return nil, nil, constants.ErrEmailNotVerified
 	}
 
 	pair, err := s.issueTokenPair(user.ID)
@@ -202,7 +192,7 @@ func (s *LocalAuthService) VerifyEmail(rawToken string) (*model.User, *TokenPair
 	userID, err := s.emailVerificationRepo.ConsumeValidByHash(hash, time.Now())
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, ErrInvalidVerificationToken
+			return nil, nil, constants.ErrInvalidVerificationToken
 		}
 		return nil, nil, fmt.Errorf("consume verification token: %w", err)
 	}
@@ -228,11 +218,11 @@ func (s *LocalAuthService) Refresh(rawRefreshToken string) (*TokenPair, error) {
 	hash := hashToken(rawRefreshToken)
 	stored, err := s.tokenRepo.FindByHash(hash)
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, constants.ErrInvalidCredentials
 	}
 	if time.Now().After(stored.ExpiresAt) {
 		_ = s.tokenRepo.DeleteByHash(hash)
-		return nil, ErrInvalidCredentials
+		return nil, constants.ErrInvalidCredentials
 	}
 
 	if err := s.tokenRepo.DeleteByHash(hash); err != nil {
@@ -255,41 +245,41 @@ func (s *LocalAuthService) ConfirmAccountLink(pendingToken, password string) (*m
 		return s.jwtSecret, nil
 	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil || !token.Valid {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 	iss, _ := claims["iss"].(string)
 	if iss != LinkIssuer {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 	googleSub, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
 	if googleSub == "" || email == "" {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 
 	user, err := s.userRepo.FindByEmail(email)
 	if err != nil {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 	if user == nil || user.ID == uuid.Nil {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 
 	if user.PasswordHash == nil {
-		return nil, nil, ErrNoPasswordSet
+		return nil, nil, constants.ErrNoPasswordSet
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)); err != nil {
-		return nil, nil, ErrInvalidCredentials
+		return nil, nil, constants.ErrInvalidCredentials
 	}
 
 	provider, err := providerFromSubject(googleSub)
 	if err != nil {
-		return nil, nil, ErrInvalidPendingToken
+		return nil, nil, constants.ErrInvalidPendingToken
 	}
 
 	linkErr := s.userIdentityRepo.Create(&model.UserIdentity{
@@ -308,7 +298,7 @@ func (s *LocalAuthService) ConfirmAccountLink(pendingToken, password string) (*m
 			return nil, nil, linkErr
 		}
 		if existing.UserID != user.ID {
-			return nil, nil, ErrLinkConflict
+			return nil, nil, constants.ErrLinkConflict
 		}
 	}
 
@@ -328,7 +318,7 @@ func (s *LocalAuthService) ConfirmAccountLink(pendingToken, password string) (*m
 
 func (s *LocalAuthService) SetPassword(userID uuid.UUID, newPassword string) error {
 	if len(newPassword) < 8 {
-		return ErrPasswordTooShort
+		return constants.ErrPasswordTooShort
 	}
 
 	user, err := s.userRepo.FindByID(userID)
@@ -336,7 +326,7 @@ func (s *LocalAuthService) SetPassword(userID uuid.UUID, newPassword string) err
 		return err
 	}
 	if user.PasswordHash != nil {
-		return ErrPasswordAlreadySet
+		return constants.ErrPasswordAlreadySet
 	}
 
 	hashBytes, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)

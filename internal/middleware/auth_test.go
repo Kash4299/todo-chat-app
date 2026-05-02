@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
@@ -201,7 +202,7 @@ func TestAuthMiddleware_BlocksWhenEmailNotVerified(t *testing.T) {
 	}
 
 	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{syncErr: service.ErrUserEmailNotVerified},
+		userService: &mockUserServiceForMW{syncErr: constants.ErrUserEmailNotVerified},
 		issuer:      "https://issuer/",
 		audience:    "aud",
 		jwksByK:     map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},

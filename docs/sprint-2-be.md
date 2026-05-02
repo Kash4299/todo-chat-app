@@ -2,7 +2,7 @@
 
 > Tasks: T05, T06, T07, T08, T47 | T48 đã hoàn thành
 >
-> **Trạng thái:** T05 ✅ hoàn thành | T06, T07, T08, T47 🔄 còn lại
+> **Trạng thái:** T05 ✅ | T06 ✅ | T07 ✅ | T08 ❌ còn lại | T47 ❌ còn lại
 
 ---
 
@@ -67,7 +67,7 @@ type IWorkspaceMemberRepository interface {
 
 ```go
 var ErrWorkspaceNotFound     = errors.New("workspace not found")
-var ErrWorkspaceForbidden    = errors.New("forbidden")
+var ErrForbidden    = errors.New("forbidden")
 var ErrWorkspaceInvalidInput = errors.New("invalid workspace input")
 
 type IWorkspaceService interface {
@@ -81,7 +81,7 @@ type IWorkspaceService interface {
 **Business rules:**
 
 - `Create`: trim name, max 100 chars. Slug = `generateSlug(name)`. Transaction: insert workspace → insert workspace_member với role `ADMIN`.
-- `GetByID`: fetch workspace → verify `IsMember(workspaceID, actorID)` → nếu không phải member trả `ErrWorkspaceForbidden`.
+- `GetByID`: fetch workspace → verify `IsMember(workspaceID, actorID)` → nếu không phải member trả `ErrForbidden`.
 - `Delete`: fetch workspace → verify `workspace.OwnerID == actorID` (phải là owner, không chỉ admin) → delete. Cascade DB tự xử lý workspace_members.
 
 **Slug helper** (private, trong `workspace_service.go`):
@@ -351,16 +351,21 @@ Làm theo thứ tự để tránh dependency lỗi:
 [x] 4.  workspace service        — Create, GetByID, ListByUser, Delete + generateSlug
 [x] 5.  workspace handler        — Create, GetByID, ListByUser, Delete
 [x] 6.  init.go / route.go       — workspace repos, service, handler wired
-[ ] 7.  email service            — NoOpEmailService stub
-[ ] 8.  workspace invitation service — Invite, ResendInvite, AcceptInvite, ListPending
-[ ] 9.  workspace handler        — thêm 4 invitation endpoints
-[ ] 10. RBAC middleware          — RequireWorkspaceRole("ADMIN"), ("MEMBER")
-[ ] 11. user service             — thêm UpdateProfile
-[ ] 12. user handler             — thêm PATCH /users/me
-[ ] 13. init.go / route.go       — wire invitation handler, RBAC, UpdateProfile route
-[ ] 14. Chạy migration 000004    — workspace_invitations table
-[ ] 15. GitHub Actions           — .github/workflows/ci.yml
+[x] 7.  email service            — SMTP (vượt spec NoOp): SendVerificationEmail + SendWorkspaceInvitationEmail
+[x] 8.  workspace invitation service — Invite, ResendInvitation, AcceptInvitation, GetListInvitations
+[x] 9.  workspace invitation handler — 4 endpoints: Invite, ResendInvitation, GetListInvitations, AcceptInvitation
+[x] 10. RBAC middleware          — RequireWorkspaceRole wired cho ADMIN routes
+[x] 11. init.go / route.go       — invitation handler + RBAC wired
+[x] 14. Migration 000004         — workspace_invitations table tồn tại
+[ ] 12. user service             — thêm UpdateProfile  ← T08
+[ ] 13. user handler             — thêm PATCH /users/me  ← T08
+[ ] 15. GitHub Actions           — .github/workflows/ci.yml  ← T47
 ```
+
+### Lệch spec cần lưu ý
+
+- **AcceptInvitation route**: spec định nghĩa `POST /invitations/accept` (không có workspace ID, token tự chứa context), nhưng hiện tại route là `POST /workspaces/:workspaceID/accept`. Cần thống nhất với FE hoặc điều chỉnh.
+- **Email service**: spec yêu cầu NoOpEmailService (log only) cho Sprint 2, nhưng đã implement SMTP thật. Không ảnh hưởng correctness nhưng cần SMTP config trong env.
 
 ---
 

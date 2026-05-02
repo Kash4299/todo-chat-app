@@ -11,4 +11,5 @@ var Module = fx.Options(
 	fx.Provide(NewTaskService),
 	fx.Provide(NewChatService),
 	fx.Provide(NewWorkspaceService),
+	fx.Provide(NewWorkspaceInvitationService),
 )

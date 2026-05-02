@@ -4,16 +4,13 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/task"
 	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
-
-var ErrTaskForbidden = errors.New("forbidden")
-var ErrTaskNotFound = errors.New("task not found")
-var ErrTaskInvalidInput = errors.New("invalid task input")
 
 type ITaskService interface {
 	Create(actorID uuid.UUID, t *model.Task) error
@@ -40,7 +37,7 @@ func NewTaskService(
 
 func (s *TaskService) Create(actorID uuid.UUID, t *model.Task) error {
 	if actorID == uuid.Nil || t == nil || t.WorkspaceID == uuid.Nil {
-		return ErrTaskInvalidInput
+		return constants.ErrTaskInvalidInput
 	}
 
 	ok, err := s.workspaceMemberRepo.IsMember(t.WorkspaceID, actorID)
@@ -48,7 +45,7 @@ func (s *TaskService) Create(actorID uuid.UUID, t *model.Task) error {
 		return err
 	}
 	if !ok {
-		return ErrTaskForbidden
+		return constants.ErrForbidden
 	}
 
 	t.CreatedBy = actorID
@@ -60,19 +57,19 @@ func (s *TaskService) Create(actorID uuid.UUID, t *model.Task) error {
 	switch t.Priority {
 	case "LOW", "MEDIUM", "HIGH", "URGENT":
 	default:
-		return ErrTaskInvalidInput
+		return constants.ErrTaskInvalidInput
 	}
 	return s.repo.Create(t)
 }
 
 func (s *TaskService) GetByID(actorID, id uuid.UUID) (*model.Task, error) {
 	if actorID == uuid.Nil || id == uuid.Nil {
-		return nil, ErrTaskInvalidInput
+		return nil, constants.ErrTaskInvalidInput
 	}
 	task, err := s.repo.FindByID(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTaskNotFound
+			return nil, constants.ErrTaskNotFound
 		}
 		return nil, err
 	}
@@ -82,7 +79,7 @@ func (s *TaskService) GetByID(actorID, id uuid.UUID) (*model.Task, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, ErrTaskForbidden
+		return nil, constants.ErrForbidden
 	}
 	return task, nil
 }

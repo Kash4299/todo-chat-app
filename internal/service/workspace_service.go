@@ -6,18 +6,13 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	workspaceRepo "github.com/Kash4299/todo-chat-app/internal/repository/workspace"
 	workspaceMemberRepo "github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
 	"github.com/Kash4299/todo-chat-app/pkg/database"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-)
-
-var (
-	ErrWorkspaceNotFound     = errors.New("workspace not found")
-	ErrWorkspaceForbidden    = errors.New("forbidden")
-	ErrWorkspaceInvalidInput = errors.New("invalid workspace input")
 )
 
 var (
@@ -67,10 +62,10 @@ func NewWorkspaceService(txManager database.ITxManager, workspaceRepo workspaceR
 func (s *WorkspaceService) Create(ownerID uuid.UUID, name string) (*model.Workspace, error) {
 	name = strings.TrimSpace(name)
 	if ownerID == uuid.Nil || name == "" {
-		return nil, ErrWorkspaceInvalidInput
+		return nil, constants.ErrWorkspaceInvalidInput
 	}
 	if len(name) > 100 {
-		return nil, ErrWorkspaceInvalidInput
+		return nil, constants.ErrWorkspaceInvalidInput
 	}
 
 	var ws *model.Workspace
@@ -100,13 +95,13 @@ func (s *WorkspaceService) Create(ownerID uuid.UUID, name string) (*model.Worksp
 
 func (s *WorkspaceService) GetByID(actorID, workspaceID uuid.UUID) (*model.Workspace, error) {
 	if actorID == uuid.Nil || workspaceID == uuid.Nil {
-		return nil, ErrWorkspaceInvalidInput
+		return nil, constants.ErrWorkspaceInvalidInput
 	}
 
 	ws, err := s.workspaceRepo.FindByID(workspaceID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrWorkspaceNotFound
+			return nil, constants.ErrWorkspaceNotFound
 		}
 		return nil, err
 	}
@@ -117,7 +112,7 @@ func (s *WorkspaceService) GetByID(actorID, workspaceID uuid.UUID) (*model.Works
 	}
 
 	if !isMember {
-		return nil, ErrWorkspaceNotFound
+		return nil, constants.ErrWorkspaceNotFound
 	}
 
 	return ws, nil
@@ -125,7 +120,7 @@ func (s *WorkspaceService) GetByID(actorID, workspaceID uuid.UUID) (*model.Works
 
 func (s *WorkspaceService) ListByUser(userID uuid.UUID, page, pageSize int) ([]model.Workspace, int64, error) {
 	if userID == uuid.Nil {
-		return nil, 0, ErrWorkspaceInvalidInput
+		return nil, 0, constants.ErrWorkspaceInvalidInput
 	}
 	if page <= 0 {
 		page = 1
@@ -138,13 +133,13 @@ func (s *WorkspaceService) ListByUser(userID uuid.UUID, page, pageSize int) ([]m
 
 func (s *WorkspaceService) Delete(actorID, workspaceID uuid.UUID) error {
 	if actorID == uuid.Nil || workspaceID == uuid.Nil {
-		return ErrWorkspaceInvalidInput
+		return constants.ErrWorkspaceInvalidInput
 	}
 
 	ws, err := s.workspaceRepo.FindByID(workspaceID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrWorkspaceNotFound
+			return constants.ErrWorkspaceNotFound
 		}
 		return err
 	}
@@ -156,11 +151,11 @@ func (s *WorkspaceService) Delete(actorID, workspaceID uuid.UUID) error {
 		return err
 	}
 	if !isMember {
-		return ErrWorkspaceNotFound
+		return constants.ErrWorkspaceNotFound
 	}
 
 	if ws.OwnerID != actorID {
-		return ErrWorkspaceForbidden
+		return constants.ErrForbidden
 	}
 
 	return s.workspaceRepo.Delete(workspaceID)

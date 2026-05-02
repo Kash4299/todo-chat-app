@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/Kash4299/todo-chat-app/pkg/response"
@@ -41,7 +42,7 @@ func (h *WorkspaceHandler) Create(c *gin.Context) {
 	ws, err := h.service.Create(creatorID, req.Name)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrWorkspaceInvalidInput):
+		case errors.Is(err, constants.ErrWorkspaceInvalidInput):
 			response.BadRequest(c, response.CodeInvalidInput, "invalid workspace name")
 		default:
 			response.InternalError(c)
@@ -73,9 +74,9 @@ func (h *WorkspaceHandler) GetByID(c *gin.Context) {
 	ws, err := h.service.GetByID(actorID, workspaceID)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrWorkspaceInvalidInput):
+		case errors.Is(err, constants.ErrWorkspaceInvalidInput):
 			response.BadRequest(c, response.CodeInvalidInput, "invalid input")
-		case errors.Is(err, service.ErrWorkspaceNotFound):
+		case errors.Is(err, constants.ErrWorkspaceNotFound):
 			response.NotFound(c, response.CodeWorkspaceNotFound, "workspace not found")
 		default:
 			response.InternalError(c)
@@ -148,11 +149,11 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 
 	if err := h.service.Delete(actorID, workspaceID); err != nil {
 		switch {
-		case errors.Is(err, service.ErrWorkspaceInvalidInput):
+		case errors.Is(err, constants.ErrWorkspaceInvalidInput):
 			response.BadRequest(c, response.CodeInvalidInput, "invalid input")
-		case errors.Is(err, service.ErrWorkspaceNotFound):
+		case errors.Is(err, constants.ErrWorkspaceNotFound):
 			response.NotFound(c, response.CodeWorkspaceNotFound, "workspace not found")
-		case errors.Is(err, service.ErrWorkspaceForbidden):
+		case errors.Is(err, constants.ErrForbidden):
 			response.Forbidden(c)
 		default:
 			response.InternalError(c)

@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
-	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -76,7 +76,7 @@ func TestTaskHandler_GetByIDRejectsWithoutAuthContext(t *testing.T) {
 
 func TestTaskHandler_GetByIDMapsForbidden(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewTaskHandler(&mockTaskService{getErr: service.ErrTaskForbidden})
+	h := NewTaskHandler(&mockTaskService{getErr: constants.ErrForbidden})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -111,7 +111,7 @@ func TestTaskHandler_CreateRejectsInvalidWorkspaceID(t *testing.T) {
 
 func TestTaskHandler_CreateMapsForbidden(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewTaskHandler(&mockTaskService{createErr: service.ErrTaskForbidden})
+	h := NewTaskHandler(&mockTaskService{createErr: constants.ErrForbidden})
 
 	body := []byte(`{"workspace_id":"` + uuid.NewString() + `","title":"x"}`)
 	w := httptest.NewRecorder()

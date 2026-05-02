@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	emailverificationrepo "github.com/Kash4299/todo-chat-app/internal/repository/emailverification"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -78,6 +79,11 @@ type mockEmailService struct {
 }
 
 func (m *mockEmailService) SendVerificationEmail(toEmail, rawToken string) error {
+	m.sendCalls++
+	return m.sendErr
+}
+
+func (m *mockEmailService) SendWorkspaceInvitationEmail(toEmail, rawToken string) error {
 	m.sendCalls++
 	return m.sendErr
 }
@@ -188,8 +194,8 @@ func TestLocalAuth_Register_EmailTaken(t *testing.T) {
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
 	_, err := svc.Register("a@example.com", "password123", "A")
-	if !errors.Is(err, service.ErrEmailTaken) {
-		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	if !errors.Is(err, constants.ErrEmailTaken) {
+		t.Fatalf("expected constants.ErrEmailTaken, got %v", err)
 	}
 }
 
@@ -197,8 +203,8 @@ func TestLocalAuth_Register_PasswordTooShort(t *testing.T) {
 	svc := newTestLocalAuthSvc(&mockUserRepo{findByEmailErr: gorm.ErrRecordNotFound}, &mockRefreshTokenRepo{})
 
 	_, err := svc.Register("a@example.com", "short", "A")
-	if !errors.Is(err, service.ErrPasswordTooShort) {
-		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
+	if !errors.Is(err, constants.ErrPasswordTooShort) {
+		t.Fatalf("expected constants.ErrPasswordTooShort, got %v", err)
 	}
 }
 
@@ -287,8 +293,8 @@ func TestLocalAuth_ResendVerification_RateLimited(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(userRepo, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, emailRepo, emailSvc)
 
 	err := svc.ResendVerification("a@example.com")
-	if !errors.Is(err, service.ErrVerificationEmailRateLimited) {
-		t.Fatalf("expected ErrVerificationEmailRateLimited, got %v", err)
+	if !errors.Is(err, constants.ErrVerificationEmailRateLimited) {
+		t.Fatalf("expected constants.ErrVerificationEmailRateLimited, got %v", err)
 	}
 	if emailSvc.sendCalls != 0 {
 		t.Fatalf("expected no email send, got %d", emailSvc.sendCalls)
@@ -384,8 +390,8 @@ func TestLocalAuth_Login_EmailNotVerified(t *testing.T) {
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
 	_, _, err := svc.Login("a@example.com", "password123")
-	if !errors.Is(err, service.ErrEmailNotVerified) {
-		t.Fatalf("expected ErrEmailNotVerified, got %v", err)
+	if !errors.Is(err, constants.ErrEmailNotVerified) {
+		t.Fatalf("expected constants.ErrEmailNotVerified, got %v", err)
 	}
 }
 
@@ -397,8 +403,8 @@ func TestLocalAuth_Login_WrongPassword(t *testing.T) {
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
 	_, _, err := svc.Login("a@example.com", "wrong-password")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidCredentials) {
+		t.Fatalf("expected constants.ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -407,8 +413,8 @@ func TestLocalAuth_Login_NoPasswordSet(t *testing.T) {
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
 	_, _, err := svc.Login("a@example.com", "anything")
-	if !errors.Is(err, service.ErrNoPasswordSet) {
-		t.Fatalf("expected ErrNoPasswordSet, got %v", err)
+	if !errors.Is(err, constants.ErrNoPasswordSet) {
+		t.Fatalf("expected constants.ErrNoPasswordSet, got %v", err)
 	}
 }
 
@@ -417,8 +423,8 @@ func TestLocalAuth_Login_NotFound(t *testing.T) {
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
 	_, _, err := svc.Login("a@example.com", "password")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidCredentials) {
+		t.Fatalf("expected constants.ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -454,8 +460,8 @@ func TestLocalAuth_VerifyEmail_InvalidToken(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(&mockUserRepo{}, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, emailVerRepo, &mockEmailService{})
 
 	_, _, err := svc.VerifyEmail("bad-token")
-	if !errors.Is(err, service.ErrInvalidVerificationToken) {
-		t.Fatalf("expected ErrInvalidVerificationToken, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidVerificationToken) {
+		t.Fatalf("expected constants.ErrInvalidVerificationToken, got %v", err)
 	}
 }
 
@@ -475,8 +481,8 @@ func TestLocalAuth_VerifyEmail_ExpiredToken(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(&mockUserRepo{}, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, emailVerRepo, &mockEmailService{})
 
 	_, _, err := svc.VerifyEmail("expired-token")
-	if !errors.Is(err, service.ErrInvalidVerificationToken) {
-		t.Fatalf("expected ErrInvalidVerificationToken for expired token, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidVerificationToken) {
+		t.Fatalf("expected constants.ErrInvalidVerificationToken for expired token, got %v", err)
 	}
 }
 
@@ -505,8 +511,8 @@ func TestLocalAuth_Refresh_NotFound(t *testing.T) {
 	svc := newTestLocalAuthSvc(&mockUserRepo{}, tokenRepo)
 
 	_, err := svc.Refresh("invalid-token")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidCredentials) {
+		t.Fatalf("expected constants.ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -520,8 +526,8 @@ func TestLocalAuth_Refresh_Expired(t *testing.T) {
 	svc := newTestLocalAuthSvc(&mockUserRepo{}, tokenRepo)
 
 	_, err := svc.Refresh("old-token")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials for expired token, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidCredentials) {
+		t.Fatalf("expected constants.ErrInvalidCredentials for expired token, got %v", err)
 	}
 }
 
@@ -554,8 +560,8 @@ func TestLocalAuth_SetPassword_AlreadySet(t *testing.T) {
 	userRepo := &mockUserRepo{findByIDUser: &model.User{ID: uuid.New(), PasswordHash: &hash}}
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
-	if err := svc.SetPassword(uuid.New(), "newpassword"); !errors.Is(err, service.ErrPasswordAlreadySet) {
-		t.Fatalf("expected ErrPasswordAlreadySet, got %v", err)
+	if err := svc.SetPassword(uuid.New(), "newpassword"); !errors.Is(err, constants.ErrPasswordAlreadySet) {
+		t.Fatalf("expected constants.ErrPasswordAlreadySet, got %v", err)
 	}
 }
 
@@ -563,8 +569,8 @@ func TestLocalAuth_SetPassword_TooShort(t *testing.T) {
 	userRepo := &mockUserRepo{findByIDUser: &model.User{ID: uuid.New()}}
 	svc := newTestLocalAuthSvc(userRepo, &mockRefreshTokenRepo{})
 
-	if err := svc.SetPassword(uuid.New(), "short"); !errors.Is(err, service.ErrPasswordTooShort) {
-		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
+	if err := svc.SetPassword(uuid.New(), "short"); !errors.Is(err, constants.ErrPasswordTooShort) {
+		t.Fatalf("expected constants.ErrPasswordTooShort, got %v", err)
 	}
 }
 
@@ -601,8 +607,8 @@ func TestLocalAuth_ConfirmAccountLink_Success(t *testing.T) {
 func TestLocalAuth_ConfirmAccountLink_InvalidToken(t *testing.T) {
 	svc := newTestLocalAuthSvc(&mockUserRepo{}, &mockRefreshTokenRepo{})
 	_, _, err := svc.ConfirmAccountLink("not-a-jwt", "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken, got %v", err)
 	}
 }
 
@@ -617,8 +623,8 @@ func TestLocalAuth_ConfirmAccountLink_WrongIssuer(t *testing.T) {
 
 	svc := newTestLocalAuthSvc(&mockUserRepo{}, &mockRefreshTokenRepo{})
 	_, _, err := svc.ConfirmAccountLink(tok, "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken for wrong issuer, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken for wrong issuer, got %v", err)
 	}
 }
 
@@ -633,8 +639,8 @@ func TestLocalAuth_ConfirmAccountLink_ExpiredToken(t *testing.T) {
 
 	svc := newTestLocalAuthSvc(&mockUserRepo{}, &mockRefreshTokenRepo{})
 	_, _, err := svc.ConfirmAccountLink(tok, "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken for expired token, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken for expired token, got %v", err)
 	}
 }
 
@@ -643,8 +649,8 @@ func TestLocalAuth_ConfirmAccountLink_UserNotFound(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(userRepo, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "ghost@example.com"), "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken when user not found, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken when user not found, got %v", err)
 	}
 }
 
@@ -653,8 +659,8 @@ func TestLocalAuth_ConfirmAccountLink_NilUserFromRepo(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(userRepo, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "alice@example.com"), "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken for nil user, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken for nil user, got %v", err)
 	}
 }
 
@@ -663,8 +669,8 @@ func TestLocalAuth_ConfirmAccountLink_ZeroUUIDUser(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(userRepo, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "alice@example.com"), "password")
-	if !errors.Is(err, service.ErrInvalidPendingToken) {
-		t.Fatalf("expected ErrInvalidPendingToken for zero-UUID user, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidPendingToken) {
+		t.Fatalf("expected constants.ErrInvalidPendingToken for zero-UUID user, got %v", err)
 	}
 }
 
@@ -673,8 +679,8 @@ func TestLocalAuth_ConfirmAccountLink_NoPasswordSet(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(&mockUserRepo{findByEmailUser: user}, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "alice@example.com"), "password")
-	if !errors.Is(err, service.ErrNoPasswordSet) {
-		t.Fatalf("expected ErrNoPasswordSet, got %v", err)
+	if !errors.Is(err, constants.ErrNoPasswordSet) {
+		t.Fatalf("expected constants.ErrNoPasswordSet, got %v", err)
 	}
 }
 
@@ -684,8 +690,8 @@ func TestLocalAuth_ConfirmAccountLink_WrongPassword(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(&mockUserRepo{findByEmailUser: user}, &mockRefreshTokenRepo{}, &mockUserIdentityRepo{}, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "alice@example.com"), "wrong-password")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	if !errors.Is(err, constants.ErrInvalidCredentials) {
+		t.Fatalf("expected constants.ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -717,8 +723,8 @@ func TestLocalAuth_ConfirmAccountLink_RaceLinkedToDifferentUser(t *testing.T) {
 	svc := newTestLocalAuthSvcFull(&mockUserRepo{findByEmailUser: user}, &mockRefreshTokenRepo{}, identityRepo, &mockEmailVerificationRepo{}, &mockEmailService{})
 
 	_, _, err := svc.ConfirmAccountLink(newPendingLinkToken(t, "google-oauth2|xyz", "alice@example.com"), "password123")
-	if !errors.Is(err, service.ErrLinkConflict) {
-		t.Fatalf("expected ErrLinkConflict, got %v", err)
+	if !errors.Is(err, constants.ErrLinkConflict) {
+		t.Fatalf("expected constants.ErrLinkConflict, got %v", err)
 	}
 }
 

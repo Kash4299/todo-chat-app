@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/repository/workspace"
 	"github.com/Kash4299/todo-chat-app/internal/repository/workspacemember"
@@ -100,8 +101,8 @@ func (m *mockMemberRepo) GetRole(_, _ uuid.UUID) (string, error) {
 	return m.role, m.getRoleErr
 }
 
-// newSvc là helper tạo WorkspaceService với mocks — tránh lặp code trong mỗi test.
-func newSvc(tx *mockTxManager, ws *mockWorkspaceRepo, mb *mockMemberRepo) service.IWorkspaceService {
+// newMockWorkspaceSerivce là helper tạo WorkspaceService với mocks — tránh lặp code trong mỗi test.
+func newMockWorkspaceSerivce(tx *mockTxManager, ws *mockWorkspaceRepo, mb *mockMemberRepo) service.IWorkspaceService {
 	return service.NewWorkspaceService(tx, ws, mb)
 }
 
@@ -110,32 +111,32 @@ func newSvc(tx *mockTxManager, ws *mockWorkspaceRepo, mb *mockMemberRepo) servic
 // ===========================================================================
 
 func TestCreate_RejectsNilOwnerID(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	_, err := svc.Create(uuid.Nil, "My Team")
 
-	if !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-		t.Fatalf("expected ErrWorkspaceInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 	}
 }
 
 func TestCreate_RejectsEmptyName(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	_, err := svc.Create(uuid.New(), "   ") // chỉ whitespace
 
-	if !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-		t.Fatalf("expected ErrWorkspaceInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 	}
 }
 
 func TestCreate_RejectsNameTooLong(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	_, err := svc.Create(uuid.New(), strings.Repeat("a", 101))
 
-	if !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-		t.Fatalf("expected ErrWorkspaceInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 	}
 }
 
@@ -143,7 +144,7 @@ func TestCreate_WorkspaceRepoError_ReturnsError(t *testing.T) {
 	// Arrange
 	dbErr := errors.New("db connection lost")
 	wsRepo := &mockWorkspaceRepo{createErr: dbErr}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	// Act
 	got, err := svc.Create(uuid.New(), "My Team")
@@ -161,7 +162,7 @@ func TestCreate_MemberAddError_ReturnsError(t *testing.T) {
 	// AddMember fail → transaction rollback, error propagated
 	addErr := errors.New("member insert failed")
 	memberRepo := &mockMemberRepo{addErr: addErr}
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, memberRepo)
 
 	got, err := svc.Create(uuid.New(), "My Team")
 
@@ -178,7 +179,7 @@ func TestCreate_Success_SetsCorrectFields(t *testing.T) {
 	ownerID := uuid.New()
 	wsRepo := &mockWorkspaceRepo{}
 	memberRepo := &mockMemberRepo{}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	// Act
 	ws, err := svc.Create(ownerID, "  My Team  ") // tên có trailing spaces
@@ -220,7 +221,7 @@ func TestCreate_Success_SetsCorrectFields(t *testing.T) {
 // ===========================================================================
 
 func TestGetByID_RejectsNilIDs(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	cases := []struct {
 		actorID     uuid.UUID
@@ -232,20 +233,20 @@ func TestGetByID_RejectsNilIDs(t *testing.T) {
 
 	for _, tc := range cases {
 		_, err := svc.GetByID(tc.actorID, tc.workspaceID)
-		if !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-			t.Errorf("expected ErrWorkspaceInvalidInput, got %v", err)
+		if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+			t.Errorf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 		}
 	}
 }
 
 func TestGetByID_WorkspaceNotFound(t *testing.T) {
 	wsRepo := &mockWorkspaceRepo{findByIDErr: gorm.ErrRecordNotFound}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	_, err := svc.GetByID(uuid.New(), uuid.New())
 
-	if !errors.Is(err, service.ErrWorkspaceNotFound) {
-		t.Fatalf("expected ErrWorkspaceNotFound, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound, got %v", err)
 	}
 }
 
@@ -253,13 +254,13 @@ func TestGetByID_NotMember_ReturnsNotFound(t *testing.T) {
 	// Security: không lộ workspace tồn tại hay không với non-member
 	wsRepo := &mockWorkspaceRepo{findByIDws: &model.Workspace{ID: uuid.New()}}
 	memberRepo := &mockMemberRepo{isMember: false}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	_, err := svc.GetByID(uuid.New(), uuid.New())
 
 	// Phải trả NotFound, không phải Forbidden — để tránh leak thông tin
-	if !errors.Is(err, service.ErrWorkspaceNotFound) {
-		t.Fatalf("expected ErrWorkspaceNotFound (not Forbidden), got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound (not Forbidden), got %v", err)
 	}
 }
 
@@ -267,7 +268,7 @@ func TestGetByID_MembershipRepoError(t *testing.T) {
 	dbErr := errors.New("membership query failed")
 	wsRepo := &mockWorkspaceRepo{findByIDws: &model.Workspace{ID: uuid.New()}}
 	memberRepo := &mockMemberRepo{isMemberErr: dbErr}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	_, err := svc.GetByID(uuid.New(), uuid.New())
 
@@ -280,7 +281,7 @@ func TestGetByID_Success(t *testing.T) {
 	expected := &model.Workspace{ID: uuid.New(), Name: "My Team"}
 	wsRepo := &mockWorkspaceRepo{findByIDws: expected}
 	memberRepo := &mockMemberRepo{isMember: true}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	got, err := svc.GetByID(uuid.New(), uuid.New())
 
@@ -297,19 +298,19 @@ func TestGetByID_Success(t *testing.T) {
 // ===========================================================================
 
 func TestListByUser_RejectsNilUserID(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	_, _, err := svc.ListByUser(uuid.Nil, 1, 20)
 
-	if !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-		t.Fatalf("expected ErrWorkspaceInvalidInput, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 	}
 }
 
 func TestListByUser_RepoError(t *testing.T) {
 	dbErr := errors.New("query failed")
 	wsRepo := &mockWorkspaceRepo{findByUErr: dbErr}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	_, _, err := svc.ListByUser(uuid.New(), 1, 20)
 
@@ -321,7 +322,7 @@ func TestListByUser_RepoError(t *testing.T) {
 func TestListByUser_Success_ReturnsAll(t *testing.T) {
 	expected := []model.Workspace{{ID: uuid.New()}, {ID: uuid.New()}}
 	wsRepo := &mockWorkspaceRepo{findByUser: expected}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	got, total, err := svc.ListByUser(uuid.New(), 1, 20)
 
@@ -339,7 +340,7 @@ func TestListByUser_Success_ReturnsAll(t *testing.T) {
 func TestListByUser_EmptyList_ReturnsNilError(t *testing.T) {
 	// Không có workspace nào → không phải lỗi, trả slice rỗng
 	wsRepo := &mockWorkspaceRepo{findByUser: []model.Workspace{}}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	got, _, err := svc.ListByUser(uuid.New(), 1, 20)
 
@@ -356,27 +357,27 @@ func TestListByUser_EmptyList_ReturnsNilError(t *testing.T) {
 // ===========================================================================
 
 func TestDelete_RejectsNilIDs(t *testing.T) {
-	svc := newSvc(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
 
 	cases := []struct{ actorID, wsID uuid.UUID }{
 		{uuid.Nil, uuid.New()},
 		{uuid.New(), uuid.Nil},
 	}
 	for _, tc := range cases {
-		if err := svc.Delete(tc.actorID, tc.wsID); !errors.Is(err, service.ErrWorkspaceInvalidInput) {
-			t.Errorf("expected ErrWorkspaceInvalidInput, got %v", err)
+		if err := svc.Delete(tc.actorID, tc.wsID); !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+			t.Errorf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
 		}
 	}
 }
 
 func TestDelete_WorkspaceNotFound(t *testing.T) {
 	wsRepo := &mockWorkspaceRepo{findByIDErr: gorm.ErrRecordNotFound}
-	svc := newSvc(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
 
 	err := svc.Delete(uuid.New(), uuid.New())
 
-	if !errors.Is(err, service.ErrWorkspaceNotFound) {
-		t.Fatalf("expected ErrWorkspaceNotFound, got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound, got %v", err)
 	}
 }
 
@@ -387,12 +388,12 @@ func TestDelete_NonMember_ReturnsNotFound(t *testing.T) {
 		findByIDws: &model.Workspace{ID: uuid.New(), OwnerID: ownerID},
 	}
 	memberRepo := &mockMemberRepo{isMember: false}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	err := svc.Delete(uuid.New(), uuid.New())
 
-	if !errors.Is(err, service.ErrWorkspaceNotFound) {
-		t.Fatalf("expected ErrWorkspaceNotFound (not Forbidden), got %v", err)
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound (not Forbidden), got %v", err)
 	}
 }
 
@@ -404,12 +405,12 @@ func TestDelete_MemberNotOwner_ReturnsForbidden(t *testing.T) {
 		findByIDws: &model.Workspace{ID: uuid.New(), OwnerID: ownerID},
 	}
 	memberRepo := &mockMemberRepo{isMember: true}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	err := svc.Delete(member, uuid.New())
 
-	if !errors.Is(err, service.ErrWorkspaceForbidden) {
-		t.Fatalf("expected ErrWorkspaceForbidden, got %v", err)
+	if !errors.Is(err, constants.ErrForbidden) {
+		t.Fatalf("expected constants.ErrForbidden, got %v", err)
 	}
 }
 
@@ -421,7 +422,7 @@ func TestDelete_DeleteRepoError(t *testing.T) {
 		deleteErr:  dbErr,
 	}
 	memberRepo := &mockMemberRepo{isMember: true}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	err := svc.Delete(ownerID, uuid.New())
 
@@ -436,7 +437,7 @@ func TestDelete_Success(t *testing.T) {
 		findByIDws: &model.Workspace{ID: uuid.New(), OwnerID: ownerID},
 	}
 	memberRepo := &mockMemberRepo{isMember: true}
-	svc := newSvc(&mockTxManager{}, wsRepo, memberRepo)
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
 
 	err := svc.Delete(ownerID, uuid.New())
 

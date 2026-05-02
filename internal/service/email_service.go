@@ -9,6 +9,7 @@ import (
 
 type IEmailService interface {
 	SendVerificationEmail(toEmail, rawToken string) error
+	SendWorkspaceInvitationEmail(toEmail, rawToken string) error
 }
 
 type SMTPEmailService struct {
@@ -81,4 +82,49 @@ func buildMIMEMessage(from, to, subject, htmlBody string) string {
 		"From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
 		from, to, subject, htmlBody,
 	)
+}
+
+func (s *SMTPEmailService) SendWorkspaceInvitationEmail(toEmail, rawToken string) error {
+	inviteURL := fmt.Sprintf("%s/workspace/accept-invitation?token=%s", strings.TrimRight(s.baseURL, "/"), rawToken)
+
+	subject := "You've been invited to a workspace"
+	body := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;max-width:560px;margin:40px auto;padding:0 16px">
+  <h2>You've been invited to join a workspace</h2>
+  <p>Click the button below to accept the invitation. The link expires in <strong>48 hours</strong>.</p>
+  <a href="%s" style="display:inline-block;padding:12px 24px;background:#4f46e5;color:#fff;text-decoration:none;border-radius:6px">Accept invitation</a>
+  <p style="margin-top:24px;color:#6b7280;font-size:13px">If you were not expecting this invitation, you can safely ignore this email.</p>
+</body>
+</html>`, inviteURL)
+
+	msg := buildMIMEMessage(s.from, toEmail, subject, body)
+
+	client, err := email.NewAuthenticatedSMTPClient(&email.SMTPConfig{
+		Host:     s.host,
+		Port:     s.port,
+		User:     s.user,
+		Password: s.password,
+		From:     s.from,
+		BaseURL:  s.baseURL,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	if err := client.Mail(s.from); err != nil {
+		return err
+	}
+	if err := client.Rcpt(toEmail); err != nil {
+		return err
+	}
+	w, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err = fmt.Fprint(w, msg); err != nil {
+		return err
+	}
+	return w.Close()
 }

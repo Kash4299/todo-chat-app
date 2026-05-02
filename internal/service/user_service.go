@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	userrepo "github.com/Kash4299/todo-chat-app/internal/repository/user"
 	useridentityrepo "github.com/Kash4299/todo-chat-app/internal/repository/useridentity"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
-
-var ErrUserEmailNotVerified = errors.New("email is not verified")
-var ErrUserNotFound = errors.New("user not found")
 
 // LinkRequiredError is returned by SyncAuth0User when a Google identity's email
 // matches an existing local account. The middleware surfaces this as HTTP 409
@@ -63,7 +61,7 @@ func (s *UserService) SyncAuth0User(auth0ID, email, displayName, avatarURL strin
 		return nil, err
 	}
 	if !emailVerified {
-		return nil, ErrUserEmailNotVerified
+		return nil, constants.ErrUserEmailNotVerified
 	}
 
 	identity, err := s.userIdentityRepo.FindByProviderSubject(auth0ID)

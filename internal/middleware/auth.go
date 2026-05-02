@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -115,7 +116,7 @@ func (m *AuthMiddleware) handleAuth0Token(c *gin.Context, claims jwt.MapClaims) 
 	emailVerified, _ := claims["email_verified"].(bool)
 
 	user, err := m.userService.SyncAuth0User(sub, email, displayName, avatarURL, emailVerified)
-	if errors.Is(err, service.ErrUserEmailNotVerified) {
+	if errors.Is(err, constants.ErrUserEmailNotVerified) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 			"error": "email is not verified",
 			"code":  "EMAIL_NOT_VERIFIED",

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -133,7 +134,7 @@ func TestLocalAuthHandler_Register_Success(t *testing.T) {
 
 func TestLocalAuthHandler_Register_EmailTaken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{registerErr: service.ErrEmailTaken})
+	h := NewLocalAuthHandler(&mockLocalAuthService{registerErr: constants.ErrEmailTaken})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com","password":"password123"}`)
@@ -150,7 +151,7 @@ func TestLocalAuthHandler_Register_EmailTaken(t *testing.T) {
 
 func TestLocalAuthHandler_Register_PasswordTooShort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{registerErr: service.ErrPasswordTooShort})
+	h := NewLocalAuthHandler(&mockLocalAuthService{registerErr: constants.ErrPasswordTooShort})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com","password":"short"}`)
@@ -202,7 +203,7 @@ func TestLocalAuthHandler_VerifyEmail_Success(t *testing.T) {
 
 func TestLocalAuthHandler_VerifyEmail_InvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{verifyEmailErr: service.ErrInvalidVerificationToken})
+	h := NewLocalAuthHandler(&mockLocalAuthService{verifyEmailErr: constants.ErrInvalidVerificationToken})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"token":"bad-token"}`)
@@ -304,7 +305,7 @@ func TestLocalAuthHandler_ResendVerification_ServiceError(t *testing.T) {
 
 func TestLocalAuthHandler_ResendVerification_RateLimited(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{resendErr: service.ErrVerificationEmailRateLimited})
+	h := NewLocalAuthHandler(&mockLocalAuthService{resendErr: constants.ErrVerificationEmailRateLimited})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com"}`)
@@ -340,7 +341,7 @@ func TestLocalAuthHandler_Login_Success(t *testing.T) {
 
 func TestLocalAuthHandler_Login_InvalidCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: service.ErrInvalidCredentials})
+	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: constants.ErrInvalidCredentials})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com","password":"wrong"}`)
@@ -357,7 +358,7 @@ func TestLocalAuthHandler_Login_InvalidCredentials(t *testing.T) {
 
 func TestLocalAuthHandler_Login_NoPassword(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: service.ErrNoPasswordSet})
+	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: constants.ErrNoPasswordSet})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com","password":"anything"}`)
@@ -374,7 +375,7 @@ func TestLocalAuthHandler_Login_NoPassword(t *testing.T) {
 
 func TestLocalAuthHandler_Login_EmailNotVerified(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: service.ErrEmailNotVerified})
+	h := NewLocalAuthHandler(&mockLocalAuthService{loginErr: constants.ErrEmailNotVerified})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"email":"a@example.com","password":"password123"}`)
@@ -410,7 +411,7 @@ func TestLocalAuthHandler_Refresh_Success(t *testing.T) {
 
 func TestLocalAuthHandler_Refresh_InvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{refreshErr: service.ErrInvalidCredentials})
+	h := NewLocalAuthHandler(&mockLocalAuthService{refreshErr: constants.ErrInvalidCredentials})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"refresh_token":"bad-token"}`)
@@ -466,7 +467,7 @@ func TestLocalAuthHandler_SetPassword_Success(t *testing.T) {
 
 func TestLocalAuthHandler_SetPassword_AlreadySet(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{setPasswordErr: service.ErrPasswordAlreadySet})
+	h := NewLocalAuthHandler(&mockLocalAuthService{setPasswordErr: constants.ErrPasswordAlreadySet})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"password":"newpassword"}`)
@@ -519,7 +520,7 @@ func TestLocalAuthHandler_ConfirmAccountLink_Success(t *testing.T) {
 
 func TestLocalAuthHandler_ConfirmAccountLink_InvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrInvalidPendingToken})
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: constants.ErrInvalidPendingToken})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"pending_token":"bad","password":"password123"}`)
@@ -536,7 +537,7 @@ func TestLocalAuthHandler_ConfirmAccountLink_InvalidToken(t *testing.T) {
 
 func TestLocalAuthHandler_ConfirmAccountLink_WrongPassword(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrInvalidCredentials})
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: constants.ErrInvalidCredentials})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"pending_token":"tok","password":"wrong"}`)
@@ -553,7 +554,7 @@ func TestLocalAuthHandler_ConfirmAccountLink_WrongPassword(t *testing.T) {
 
 func TestLocalAuthHandler_ConfirmAccountLink_Conflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: service.ErrLinkConflict})
+	h := NewLocalAuthHandler(&mockLocalAuthService{confirmLinkErr: constants.ErrLinkConflict})
 
 	w := httptest.NewRecorder()
 	body := []byte(`{"pending_token":"tok","password":"password123"}`)

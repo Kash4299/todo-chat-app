@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -51,7 +52,7 @@ func newRBACTestHarness(t *testing.T) *rbacTestHarness {
 		}
 		c.Next()
 	})
-	r.GET("/workspaces/:workspaceID/resource", rbac.RequireWorkspaceRole([]string{middleware.AdminRole, middleware.MemberRole, middleware.GuestRole}), func(c *gin.Context) {
+	r.GET("/workspaces/:workspaceID/resource", rbac.RequireWorkspaceRole([]string{constants.AdminRole, constants.MemberRole, constants.GuestRole}), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -162,7 +163,7 @@ func TestRBACMiddleware_RequireWorkspaceRole_HTTPFlow(t *testing.T) {
 			name:             "allows request when role is ADMIN",
 			workspaceID:      uuid.NewString(),
 			userID:           uuid.NewString(),
-			serviceRole:      middleware.AdminRole,
+			serviceRole:      constants.AdminRole,
 			expectedStatus:   http.StatusOK,
 			expectSvcCalled:  true,
 			expectedSvcCalls: 1,
@@ -171,7 +172,7 @@ func TestRBACMiddleware_RequireWorkspaceRole_HTTPFlow(t *testing.T) {
 			name:             "allows request when role is MEMBER",
 			workspaceID:      uuid.NewString(),
 			userID:           uuid.NewString(),
-			serviceRole:      middleware.MemberRole,
+			serviceRole:      constants.MemberRole,
 			expectedStatus:   http.StatusOK,
 			expectSvcCalled:  true,
 			expectedSvcCalls: 1,
@@ -180,7 +181,7 @@ func TestRBACMiddleware_RequireWorkspaceRole_HTTPFlow(t *testing.T) {
 			name:             "allows request when role is GUEST",
 			workspaceID:      uuid.NewString(),
 			userID:           uuid.NewString(),
-			serviceRole:      middleware.GuestRole,
+			serviceRole:      constants.GuestRole,
 			expectedStatus:   http.StatusOK,
 			expectSvcCalled:  true,
 			expectedSvcCalls: 1,
@@ -222,7 +223,7 @@ func TestRBACMiddleware_WorkspaceIDRequired_DirectInvocation(t *testing.T) {
 
 	roleService := &mockWorkspaceRoleService{}
 	rbac := middleware.NewRBACMiddleware(roleService)
-	handler := rbac.RequireWorkspaceRole([]string{middleware.AdminRole})
+	handler := rbac.RequireWorkspaceRole([]string{constants.AdminRole})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -242,7 +243,7 @@ func TestRBACMiddleware_UserContextWrongType_ReturnsUnauthorized(t *testing.T) {
 
 	roleService := &mockWorkspaceRoleService{}
 	rbac := middleware.NewRBACMiddleware(roleService)
-	handler := rbac.RequireWorkspaceRole([]string{middleware.AdminRole})
+	handler := rbac.RequireWorkspaceRole([]string{constants.AdminRole})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

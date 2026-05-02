@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -66,9 +67,9 @@ func (h *TaskHandler) Create(c *gin.Context) {
 
 	if err := h.service.Create(creatorID, task); err != nil {
 		switch {
-		case errors.Is(err, service.ErrTaskForbidden):
+		case errors.Is(err, constants.ErrForbidden):
 			response.Forbidden(c)
-		case errors.Is(err, service.ErrTaskInvalidInput):
+		case errors.Is(err, constants.ErrTaskInvalidInput):
 			response.BadRequest(c, response.CodeInvalidInput, "invalid task input")
 		default:
 			response.InternalError(c)
@@ -100,11 +101,11 @@ func (h *TaskHandler) GetByID(c *gin.Context) {
 	task, err := h.service.GetByID(requesterID, id)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrTaskInvalidInput):
+		case errors.Is(err, constants.ErrTaskInvalidInput):
 			response.BadRequest(c, response.CodeInvalidInput, "invalid task input")
-		case errors.Is(err, service.ErrTaskForbidden):
+		case errors.Is(err, constants.ErrForbidden):
 			response.Forbidden(c)
-		case errors.Is(err, service.ErrTaskNotFound):
+		case errors.Is(err, constants.ErrTaskNotFound):
 			response.NotFound(c, response.CodeNotFound, "task not found")
 		default:
 			response.InternalError(c)

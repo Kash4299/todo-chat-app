@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/Kash4299/todo-chat-app/pkg/response"
@@ -65,9 +66,9 @@ func (h *LocalAuthHandler) Register(c *gin.Context) {
 	user, err := h.service.Register(req.Email, req.Password, req.DisplayName)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrEmailTaken):
+		case errors.Is(err, constants.ErrEmailTaken):
 			response.Conflict(c, response.CodeEmailTaken, "email already registered")
-		case errors.Is(err, service.ErrPasswordTooShort):
+		case errors.Is(err, constants.ErrPasswordTooShort):
 			response.BadRequest(c, response.CodePasswordTooShort, "password must be at least 8 characters")
 		default:
 			response.InternalError(c)
@@ -93,7 +94,7 @@ func (h *LocalAuthHandler) VerifyEmail(c *gin.Context) {
 	user, pair, err := h.service.VerifyEmail(req.Token)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrInvalidVerificationToken):
+		case errors.Is(err, constants.ErrInvalidVerificationToken):
 			response.BadRequest(c, response.CodeTokenInvalid, "invalid or expired verification token")
 		default:
 			response.InternalError(c)
@@ -115,7 +116,7 @@ func (h *LocalAuthHandler) ResendVerification(c *gin.Context) {
 
 	if err := h.service.ResendVerification(req.Email); err != nil {
 		switch {
-		case errors.Is(err, service.ErrVerificationEmailRateLimited):
+		case errors.Is(err, constants.ErrVerificationEmailRateLimited):
 			response.OK(c, gin.H{"message": "if the account exists and is unverified, a verification email has been sent"})
 		default:
 			response.InternalError(c)
@@ -136,11 +137,11 @@ func (h *LocalAuthHandler) Login(c *gin.Context) {
 	user, pair, err := h.service.Login(req.Email, req.Password)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrInvalidCredentials):
+		case errors.Is(err, constants.ErrInvalidCredentials):
 			response.Unauthorized(c, response.CodeInvalidCredentials, "invalid email or password")
-		case errors.Is(err, service.ErrNoPasswordSet):
+		case errors.Is(err, constants.ErrNoPasswordSet):
 			response.Unauthorized(c, response.CodeInvalidCredentials, "this account uses Google login; no password is set")
-		case errors.Is(err, service.ErrEmailNotVerified):
+		case errors.Is(err, constants.ErrEmailNotVerified):
 			response.ForbiddenCode(c, response.CodeEmailNotVerified, "email not verified; please check your inbox")
 		default:
 			response.InternalError(c)
@@ -188,13 +189,13 @@ func (h *LocalAuthHandler) ConfirmAccountLink(c *gin.Context) {
 	user, pair, err := h.service.ConfirmAccountLink(req.PendingToken, req.Password)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrInvalidPendingToken):
+		case errors.Is(err, constants.ErrInvalidPendingToken):
 			response.BadRequest(c, response.CodeTokenInvalid, "invalid or expired link token")
-		case errors.Is(err, service.ErrInvalidCredentials):
+		case errors.Is(err, constants.ErrInvalidCredentials):
 			response.Unauthorized(c, response.CodeInvalidCredentials, "invalid password")
-		case errors.Is(err, service.ErrNoPasswordSet):
+		case errors.Is(err, constants.ErrNoPasswordSet):
 			response.Unauthorized(c, response.CodeInvalidCredentials, "this account uses Google login only; no local password is set")
-		case errors.Is(err, service.ErrLinkConflict):
+		case errors.Is(err, constants.ErrLinkConflict):
 			response.Conflict(c, response.CodeConflict, "google identity is already linked to a different account")
 		default:
 			response.InternalError(c)
@@ -225,9 +226,9 @@ func (h *LocalAuthHandler) SetPassword(c *gin.Context) {
 
 	if err := h.service.SetPassword(userID, req.Password); err != nil {
 		switch {
-		case errors.Is(err, service.ErrPasswordAlreadySet):
+		case errors.Is(err, constants.ErrPasswordAlreadySet):
 			response.Conflict(c, response.CodePasswordAlreadySet, "password already set; use change-password flow")
-		case errors.Is(err, service.ErrPasswordTooShort):
+		case errors.Is(err, constants.ErrPasswordTooShort):
 			response.BadRequest(c, response.CodePasswordTooShort, "password must be at least 8 characters")
 		default:
 			response.InternalError(c)

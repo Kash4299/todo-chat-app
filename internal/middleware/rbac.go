@@ -10,12 +10,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	AdminRole  = "ADMIN"
-	MemberRole = "MEMBER"
-	GuestRole  = "GUEST"
-)
-
 type IWorkspaceMemberRoleService interface {
 	GetRole(workspaceID, userID uuid.UUID) (string, error)
 }

@@ -1,12 +1,14 @@
 package route
 
 import (
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/handler"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
+
 	"github.com/gin-gonic/gin"
 )
 
-var allowedRoles = []string{middleware.AdminRole, middleware.MemberRole}
+var allowedRoles = []string{constants.AdminRole, constants.MemberRole}
 
 func SetupRoutes(
 	r *gin.Engine,
@@ -15,6 +17,7 @@ func SetupRoutes(
 	taskHandler *handler.TaskHandler,
 	chatHandler *handler.ChatHandler,
 	workspaceHandler *handler.WorkspaceHandler,
+	workspaceInvitationHandler *handler.WorkspaceInvitationHandler,
 	authMiddleware *middleware.AuthMiddleware,
 	rbacMiddleware *middleware.RBACMiddleware,
 ) {
@@ -61,8 +64,14 @@ func SetupRoutes(
 			workspaces.GET("", workspaceHandler.ListByUser)
 			workspaces.GET("/:workspaceID", rbacMiddleware.RequireWorkspaceRole(allowedRoles), workspaceHandler.GetByID)
 			workspaces.POST("", workspaceHandler.Create)
-			workspaces.DELETE("/:workspaceID", rbacMiddleware.RequireWorkspaceRole([]string{middleware.AdminRole}), workspaceHandler.Delete)
+			workspaces.DELETE("/:workspaceID", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceHandler.Delete)
+
+			workspaces.POST("/:workspaceID/invitations", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceInvitationHandler.Invite)
+			workspaces.POST("/:workspaceID/invitations/resend", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceInvitationHandler.ResendInvitation)
+			workspaces.GET("/:workspaceID/invitations", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceInvitationHandler.GetListInvitations)
 		}
+
+		protected.POST("/invitations/accept", workspaceInvitationHandler.AcceptInvitation)
 
 		ws := protected.Group("/ws")
 		{

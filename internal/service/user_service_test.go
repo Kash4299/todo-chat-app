@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/google/uuid"
@@ -167,8 +168,8 @@ func TestUserService_SyncAuth0User_RejectsUnverifiedExistingIdentity(t *testing.
 	svc := service.NewUserService(userRepo, identityRepo)
 
 	_, err := svc.SyncAuth0User("auth0|abc", "old@example.com", "Old", "", false)
-	if !errors.Is(err, service.ErrUserEmailNotVerified) {
-		t.Fatalf("expected ErrUserEmailNotVerified, got %v", err)
+	if !errors.Is(err, constants.ErrUserEmailNotVerified) {
+		t.Fatalf("expected constants.ErrUserEmailNotVerified, got %v", err)
 	}
 	if userRepo.updateCalls != 0 {
 		t.Fatalf("expected no profile update, got %d", userRepo.updateCalls)
@@ -212,8 +213,8 @@ func TestUserService_SyncAuth0User_RejectsUnverifiedEmailLinking(t *testing.T) {
 	svc := service.NewUserService(userRepo, identityRepo)
 
 	_, err := svc.SyncAuth0User("google-oauth2|xyz", "same@example.com", "Existing", "", false)
-	if !errors.Is(err, service.ErrUserEmailNotVerified) {
-		t.Fatalf("expected ErrUserEmailNotVerified, got %v", err)
+	if !errors.Is(err, constants.ErrUserEmailNotVerified) {
+		t.Fatalf("expected constants.ErrUserEmailNotVerified, got %v", err)
 	}
 }
 
@@ -287,8 +288,8 @@ func TestUserService_SyncAuth0User_RejectsUnverifiedEmailForNewUser(t *testing.T
 	svc := service.NewUserService(userRepo, identityRepo)
 
 	_, err := svc.SyncAuth0User("auth0|abc", "test@yopmail.com", "Test", "", false)
-	if !errors.Is(err, service.ErrUserEmailNotVerified) {
-		t.Fatalf("expected ErrUserEmailNotVerified for new user with unverified email, got %v", err)
+	if !errors.Is(err, constants.ErrUserEmailNotVerified) {
+		t.Fatalf("expected constants.ErrUserEmailNotVerified for new user with unverified email, got %v", err)
 	}
 	if userRepo.createCalls != 0 {
 		t.Fatal("expected no user created when email is not verified")

@@ -30,9 +30,10 @@ func StartServer(
 	chatHandler *handler.ChatHandler,
 	authMiddleware *middleware.AuthMiddleware,
 	workspaceHandler *handler.WorkspaceHandler,
+	workspaceInvitationHandler *handler.WorkspaceInvitationHandler,
 	rbacMiddleware *middleware.RBACMiddleware,
 ) {
-	route.SetupRoutes(router, userHandler, localAuthHandler, taskHandler, chatHandler, workspaceHandler, authMiddleware, rbacMiddleware)
+	route.SetupRoutes(router, userHandler, localAuthHandler, taskHandler, chatHandler, workspaceHandler, workspaceInvitationHandler, authMiddleware, rbacMiddleware)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.ServerPort),
