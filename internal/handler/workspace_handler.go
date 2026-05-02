@@ -64,7 +64,7 @@ func (h *WorkspaceHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	workspaceID, err := uuid.Parse(c.Param("id"))
+	workspaceID, err := uuid.Parse(c.Param("workspaceID"))
 	if err != nil {
 		response.BadRequest(c, response.CodeInvalidInput, "invalid workspace id")
 		return
@@ -140,7 +140,7 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	workspaceID, err := uuid.Parse(c.Param("id"))
+	workspaceID, err := uuid.Parse(c.Param("workspaceID"))
 	if err != nil {
 		response.BadRequest(c, response.CodeInvalidInput, "invalid workspace id")
 		return

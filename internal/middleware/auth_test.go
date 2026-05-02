@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -97,9 +98,7 @@ func buildTestToken(
 		"exp": time.Now().Add(10 * time.Minute).Unix(),
 		"iat": time.Now().Add(-1 * time.Minute).Unix(),
 	}
-	for k, v := range extraClaims {
-		claims[k] = v
-	}
+	maps.Copy(claims, extraClaims)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = kid

@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var allowedRoles = []string{middleware.AdminRole, middleware.MemberRole}
+
 func SetupRoutes(
 	r *gin.Engine,
 	userHandler *handler.UserHandler,
@@ -14,6 +16,7 @@ func SetupRoutes(
 	chatHandler *handler.ChatHandler,
 	workspaceHandler *handler.WorkspaceHandler,
 	authMiddleware *middleware.AuthMiddleware,
+	rbacMiddleware *middleware.RBACMiddleware,
 ) {
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{"message": "pong"})
@@ -56,9 +59,9 @@ func SetupRoutes(
 		workspaces := protected.Group("/workspaces")
 		{
 			workspaces.GET("", workspaceHandler.ListByUser)
-			workspaces.GET("/:id", workspaceHandler.GetByID)
+			workspaces.GET("/:workspaceID", rbacMiddleware.RequireWorkspaceRole(allowedRoles), workspaceHandler.GetByID)
 			workspaces.POST("", workspaceHandler.Create)
-			workspaces.DELETE("/:id", workspaceHandler.Delete)
+			workspaces.DELETE("/:workspaceID", rbacMiddleware.RequireWorkspaceRole([]string{middleware.AdminRole}), workspaceHandler.Delete)
 		}
 
 		ws := protected.Group("/ws")

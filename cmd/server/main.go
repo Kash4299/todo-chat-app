@@ -32,7 +32,10 @@ func main() {
 		repository.Module,
 		service.Module,
 		handler.Module,
+
+		// Middleware
 		fx.Provide(middleware.NewAuthMiddleware),
+		fx.Provide(middleware.NewRBACMiddleware),
 
 		// Server lifecycle
 		fx.Invoke(server.StartServer),
