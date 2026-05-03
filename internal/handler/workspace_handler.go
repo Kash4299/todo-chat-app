@@ -129,6 +129,98 @@ func (h *WorkspaceHandler) ListByUser(c *gin.Context) {
 	})
 }
 
+type updateWorkspaceRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+func (h *WorkspaceHandler) Update(c *gin.Context) {
+	var req updateWorkspaceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid request body")
+		return
+	}
+
+	userIDVal, _ := c.Get(middleware.UserIDContextKey)
+	actorID, ok := userIDVal.(uuid.UUID)
+	if !ok || actorID == uuid.Nil {
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
+		return
+	}
+
+	workspaceID, err := uuid.Parse(c.Param("workspaceID"))
+	if err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid workspace id")
+		return
+	}
+
+	ws, err := h.service.Update(actorID, workspaceID, req.Name)
+	if err != nil {
+		switch {
+		case errors.Is(err, constants.ErrWorkspaceInvalidInput):
+			response.BadRequest(c, response.CodeInvalidInput, "invalid input")
+		case errors.Is(err, constants.ErrWorkspaceNotFound):
+			response.NotFound(c, response.CodeWorkspaceNotFound, "workspace not found")
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.OK(c, ws)
+}
+
+func (h *WorkspaceHandler) GetMembers(c *gin.Context) {
+	userIDVal, exists := c.Get(middleware.UserIDContextKey)
+	if !exists {
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
+		return
+	}
+	actorID, ok := userIDVal.(uuid.UUID)
+	if !ok || actorID == uuid.Nil {
+		response.Unauthorized(c, response.CodeUnauthorized, "invalid user identity")
+		return
+	}
+
+	workspaceID, err := uuid.Parse(c.Param("workspaceID"))
+	if err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid workspace id")
+		return
+	}
+
+	page := 1
+	if p := c.Query("page"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+
+	pageSize := 50
+	if ps := c.Query("page_size"); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 && n <= 100 {
+			pageSize = n
+		}
+	}
+
+	members, total, err := h.service.ListMembers(actorID, workspaceID, page, pageSize)
+	if err != nil {
+		switch {
+		case errors.Is(err, constants.ErrWorkspaceNotFound):
+			response.NotFound(c, response.CodeWorkspaceNotFound, "workspace not found")
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(pageSize)))
+	response.List(c, members, &response.PaginationMeta{
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	})
+}
+
 func (h *WorkspaceHandler) Delete(c *gin.Context) {
 	userIDVal, exists := c.Get(middleware.UserIDContextKey)
 	if !exists {

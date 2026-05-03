@@ -82,6 +82,10 @@ func (m *mockWorkspaceMemberRepo) GetRole(workspaceID, userID uuid.UUID) (string
 	return m.role, m.err
 }
 
+func (m *mockWorkspaceMemberRepo) ListWithUsers(_ uuid.UUID, _, _ int) ([]model.WorkspaceMemberInfo, int64, error) {
+	return nil, 0, nil
+}
+
 // ── Create ────────────────────────────────────────────────────────────────────
 
 func TestTaskService_CreateRejectsInvalidInput(t *testing.T) {

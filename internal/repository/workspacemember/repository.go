@@ -11,6 +11,7 @@ type IWorkspaceMemberRepository interface {
 	IsMember(workspaceID, userID uuid.UUID) (bool, error)
 	AddMember(workspaceID, userID uuid.UUID, role string) error
 	GetRole(workspaceID, userID uuid.UUID) (string, error)
+	ListWithUsers(workspaceID uuid.UUID, page, pageSize int) ([]model.WorkspaceMemberInfo, int64, error)
 }
 
 type WorkspaceMemberRepository struct {
@@ -50,4 +51,26 @@ func (r *WorkspaceMemberRepository) GetRole(workspaceID, userID uuid.UUID) (stri
 		return "", err
 	}
 	return member.Role, nil
+}
+
+func (r *WorkspaceMemberRepository) ListWithUsers(workspaceID uuid.UUID, page, pageSize int) ([]model.WorkspaceMemberInfo, int64, error) {
+	const selectCols = "users.id AS user_id, users.display_name, users.email, users.avatar_url, workspace_members.role, workspace_members.joined_at"
+	const join = "JOIN users ON workspace_members.user_id = users.id"
+	const where = "workspace_members.workspace_id = ?"
+
+	var total int64
+	if err := r.db.Model(&model.WorkspaceMember{}).Joins(join).Where(where, workspaceID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	var members []model.WorkspaceMemberInfo
+	err := r.db.Model(&model.WorkspaceMember{}).
+		Select(selectCols).
+		Joins(join).
+		Where(where, workspaceID).
+		Order("workspace_members.joined_at ASC").
+		Limit(pageSize).Offset(offset).
+		Scan(&members).Error
+	return members, total, err
 }

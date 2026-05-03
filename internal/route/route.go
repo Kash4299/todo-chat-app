@@ -66,9 +66,11 @@ func SetupRoutes(
 		workspaces := protected.Group("/workspaces")
 		{
 			workspaces.GET("", workspaceHandler.ListByUser)
-			workspaces.GET("/:workspaceID", rbacMiddleware.RequireWorkspaceRole(allowedRoles), workspaceHandler.GetByID)
 			workspaces.POST("", workspaceHandler.Create)
+			workspaces.GET("/:workspaceID", rbacMiddleware.RequireWorkspaceRole(allowedRoles), workspaceHandler.GetByID)
+			workspaces.PATCH("/:workspaceID", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceHandler.Update)
 			workspaces.DELETE("/:workspaceID", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceHandler.Delete)
+			workspaces.GET("/:workspaceID/members", rbacMiddleware.RequireWorkspaceRole(allowedRoles), workspaceHandler.GetMembers)
 
 			workspaces.POST("/:workspaceID/invitations", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceInvitationHandler.Invite)
 			workspaces.POST("/:workspaceID/invitations/resend", rbacMiddleware.RequireWorkspaceRole([]string{constants.AdminRole}), workspaceInvitationHandler.ResendInvitation)

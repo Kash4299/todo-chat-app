@@ -13,6 +13,7 @@ type IWorkspaceRepository interface {
 	// FindByUserID returns a page of workspaces the user belongs to, sorted by created_at DESC.
 	// page is 1-indexed. pageSize is the number of items per page.
 	FindByUserID(userID uuid.UUID, page, pageSize int) ([]model.Workspace, int64, error)
+	Update(ws *model.Workspace) error
 	Delete(id uuid.UUID) error
 }
 
@@ -59,6 +60,10 @@ func (r *WorkspaceRepository) FindByUserID(userID uuid.UUID, page, pageSize int)
 		return nil, 0, err
 	}
 	return workspaces, total, nil
+}
+
+func (r *WorkspaceRepository) Update(ws *model.Workspace) error {
+	return r.db.Save(ws).Error
 }
 
 func (r *WorkspaceRepository) Delete(id uuid.UUID) error {

@@ -56,9 +56,11 @@ type mockWorkspaceRepo struct {
 	findByIDErr error
 	findByUser  []model.Workspace
 	findByUErr  error
+	updateErr   error
 	deleteErr   error
 	// capture args để verify service truyền đúng giá trị
-	createdWS *model.Workspace
+	createdWS  *model.Workspace
+	updatedWS  *model.Workspace
 }
 
 func (m *mockWorkspaceRepo) WithTx(_ *gorm.DB) workspace.IWorkspaceRepository { return m }
@@ -71,6 +73,10 @@ func (m *mockWorkspaceRepo) FindByID(_ uuid.UUID) (*model.Workspace, error) {
 }
 func (m *mockWorkspaceRepo) FindByUserID(_ uuid.UUID, _, _ int) ([]model.Workspace, int64, error) {
 	return m.findByUser, int64(len(m.findByUser)), m.findByUErr
+}
+func (m *mockWorkspaceRepo) Update(ws *model.Workspace) error {
+	m.updatedWS = ws
+	return m.updateErr
 }
 func (m *mockWorkspaceRepo) Delete(_ uuid.UUID) error { return m.deleteErr }
 
@@ -99,6 +105,10 @@ func (m *mockMemberRepo) AddMember(wsID, userID uuid.UUID, role string) error {
 }
 func (m *mockMemberRepo) GetRole(_, _ uuid.UUID) (string, error) {
 	return m.role, m.getRoleErr
+}
+
+func (m *mockMemberRepo) ListWithUsers(_ uuid.UUID, _, _ int) ([]model.WorkspaceMemberInfo, int64, error) {
+	return nil, 0, nil
 }
 
 // newMockWorkspaceSerivce là helper tạo WorkspaceService với mocks — tránh lặp code trong mỗi test.
@@ -443,5 +453,104 @@ func TestDelete_Success(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+// ===========================================================================
+// Update
+// ===========================================================================
+
+func TestUpdate_RejectsNilIDs(t *testing.T) {
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+
+	cases := []struct{ actorID, wsID uuid.UUID }{
+		{uuid.Nil, uuid.New()},
+		{uuid.New(), uuid.Nil},
+	}
+	for _, tc := range cases {
+		_, err := svc.Update(tc.actorID, tc.wsID, "New Name")
+		if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+			t.Errorf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
+		}
+	}
+}
+
+func TestUpdate_RejectsEmptyName(t *testing.T) {
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+
+	_, err := svc.Update(uuid.New(), uuid.New(), "   ")
+
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdate_RejectsNameTooLong(t *testing.T) {
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, &mockWorkspaceRepo{}, &mockMemberRepo{})
+
+	_, err := svc.Update(uuid.New(), uuid.New(), strings.Repeat("a", 101))
+
+	if !errors.Is(err, constants.ErrWorkspaceInvalidInput) {
+		t.Fatalf("expected constants.ErrWorkspaceInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdate_WorkspaceNotFound(t *testing.T) {
+	wsRepo := &mockWorkspaceRepo{findByIDErr: gorm.ErrRecordNotFound}
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, &mockMemberRepo{})
+
+	_, err := svc.Update(uuid.New(), uuid.New(), "New Name")
+
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound, got %v", err)
+	}
+}
+
+func TestUpdate_NonMember_ReturnsNotFound(t *testing.T) {
+	wsRepo := &mockWorkspaceRepo{findByIDws: &model.Workspace{ID: uuid.New()}}
+	memberRepo := &mockMemberRepo{isMember: false}
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
+
+	_, err := svc.Update(uuid.New(), uuid.New(), "New Name")
+
+	if !errors.Is(err, constants.ErrWorkspaceNotFound) {
+		t.Fatalf("expected constants.ErrWorkspaceNotFound (not Forbidden), got %v", err)
+	}
+}
+
+func TestUpdate_RepoError(t *testing.T) {
+	dbErr := errors.New("update failed")
+	wsRepo := &mockWorkspaceRepo{
+		findByIDws: &model.Workspace{ID: uuid.New()},
+		updateErr:  dbErr,
+	}
+	memberRepo := &mockMemberRepo{isMember: true}
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
+
+	_, err := svc.Update(uuid.New(), uuid.New(), "New Name")
+
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("expected update error, got %v", err)
+	}
+}
+
+func TestUpdate_Success_UpdatesName(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := &mockWorkspaceRepo{
+		findByIDws: &model.Workspace{ID: wsID, Name: "Old Name"},
+	}
+	memberRepo := &mockMemberRepo{isMember: true}
+	svc := newMockWorkspaceSerivce(&mockTxManager{}, wsRepo, memberRepo)
+
+	got, err := svc.Update(uuid.New(), wsID, "  New Name  ")
+
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.Name != "New Name" {
+		t.Errorf("expected trimmed name 'New Name', got %q", got.Name)
+	}
+	if wsRepo.updatedWS == nil {
+		t.Fatal("expected Update to be called on repo")
 	}
 }

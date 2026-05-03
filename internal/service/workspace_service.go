@@ -42,7 +42,9 @@ type IWorkspaceService interface {
 	Create(ownerID uuid.UUID, name string) (*model.Workspace, error)
 	GetByID(actorID, workspaceID uuid.UUID) (*model.Workspace, error)
 	ListByUser(userID uuid.UUID, page, pageSize int) ([]model.Workspace, int64, error)
+	Update(actorID, workspaceID uuid.UUID, name string) (*model.Workspace, error)
 	Delete(actorID, workspaceID uuid.UUID) error
+	ListMembers(actorID, workspaceID uuid.UUID, page, pageSize int) ([]model.WorkspaceMemberInfo, int64, error)
 }
 
 type WorkspaceService struct {
@@ -129,6 +131,61 @@ func (s *WorkspaceService) ListByUser(userID uuid.UUID, page, pageSize int) ([]m
 		pageSize = 20
 	}
 	return s.workspaceRepo.FindByUserID(userID, page, pageSize)
+}
+
+func (s *WorkspaceService) Update(actorID, workspaceID uuid.UUID, name string) (*model.Workspace, error) {
+	name = strings.TrimSpace(name)
+	if actorID == uuid.Nil || workspaceID == uuid.Nil || name == "" {
+		return nil, constants.ErrWorkspaceInvalidInput
+	}
+	if len(name) > 100 {
+		return nil, constants.ErrWorkspaceInvalidInput
+	}
+
+	ws, err := s.workspaceRepo.FindByID(workspaceID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, constants.ErrWorkspaceNotFound
+		}
+		return nil, err
+	}
+
+	isMember, err := s.workspaceMemberRepo.IsMember(workspaceID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, constants.ErrWorkspaceNotFound
+	}
+
+	ws.Name = name
+	if err := s.workspaceRepo.Update(ws); err != nil {
+		return nil, err
+	}
+
+	return ws, nil
+}
+
+func (s *WorkspaceService) ListMembers(actorID, workspaceID uuid.UUID, page, pageSize int) ([]model.WorkspaceMemberInfo, int64, error) {
+	if actorID == uuid.Nil || workspaceID == uuid.Nil {
+		return nil, 0, constants.ErrWorkspaceInvalidInput
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50
+	}
+
+	isMember, err := s.workspaceMemberRepo.IsMember(workspaceID, actorID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !isMember {
+		return nil, 0, constants.ErrWorkspaceNotFound
+	}
+
+	return s.workspaceMemberRepo.ListWithUsers(workspaceID, page, pageSize)
 }
 
 func (s *WorkspaceService) Delete(actorID, workspaceID uuid.UUID) error {
