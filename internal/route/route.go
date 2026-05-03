@@ -51,12 +51,16 @@ func SetupRoutes(
 	protected.Use(authMiddleware.Handle())
 	{
 		protected.GET("/users/me", userHandler.GetMe)
+		protected.PATCH("/users/me", userHandler.UpdateProfile)
 		protected.POST("/users/me/password", localAuthHandler.SetPassword)
 
 		tasks := protected.Group("/tasks")
 		{
 			tasks.POST("", taskHandler.Create)
+			tasks.GET("", taskHandler.List)
 			tasks.GET("/:id", taskHandler.GetByID)
+			tasks.PATCH("/:id", taskHandler.UpdateTask)
+			tasks.DELETE("/:id", taskHandler.DeleteTask)
 		}
 
 		workspaces := protected.Group("/workspaces")

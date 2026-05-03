@@ -15,6 +15,7 @@ var (
 	ErrVerificationEmailRateLimited     = errors.New("verification email sent recently; please wait before requesting another")
 	ErrUserEmailNotVerified             = errors.New("email is not verified")
 	ErrUserNotFound                     = errors.New("user not found")
+	ErrUserInvalidInput                 = errors.New("invalid user input")
 	ErrForbidden                        = errors.New("forbidden")
 	ErrTaskNotFound                     = errors.New("task not found")
 	ErrTaskInvalidInput                 = errors.New("invalid task input")

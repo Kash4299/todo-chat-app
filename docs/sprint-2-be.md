@@ -1,8 +1,8 @@
 # Sprint 2 — Backend Implementation Spec
 
-> Tasks: T05, T06, T07, T08, T47 | T48 đã hoàn thành
+> Tasks: T05, T06, T07, T08, T47 | T48 đã hoàn thành | T25-partial + T32-partial pulled in to unblock FE
 >
-> **Trạng thái:** T05 ✅ | T06 ✅ | T07 ✅ | T08 ❌ còn lại | T47 ❌ còn lại
+> **Trạng thái:** T05 ✅ | T06 ✅ | T07 ✅ | T08 ✅ | T25-partial ✅ | T32-partial ✅ | T47 ⏭️ bỏ qua sprint này
 
 ---
 
@@ -357,15 +357,20 @@ Làm theo thứ tự để tránh dependency lỗi:
 [x] 10. RBAC middleware          — RequireWorkspaceRole wired cho ADMIN routes
 [x] 11. init.go / route.go       — invitation handler + RBAC wired
 [x] 14. Migration 000004         — workspace_invitations table tồn tại
-[ ] 12. user service             — thêm UpdateProfile  ← T08
-[ ] 13. user handler             — thêm PATCH /users/me  ← T08
-[ ] 15. GitHub Actions           — .github/workflows/ci.yml  ← T47
+[x] 12. user service             — UpdateProfile (validate displayName ≤100, statusText ≤150, avatarURL http/https)
+[x] 13. user handler + route     — PATCH /users/me → 200 + user
+[x] 16. task service             — ListByWorkspace (auth + pagination), UpdateTask (auth + validation), DeleteTask (auth) [T25-partial + T32-partial]
+[x] 17. task handler + routes    — GET /tasks?workspace_id&page&page_size, PATCH /tasks/:id, DELETE /tasks/:id [FE08, FE09, FE10]
+[x] 18. task repo                — FindByWorkspace(offset,limit) + CountByWorkspace for OFFSET pagination
+[ ] 15. GitHub Actions           — bỏ qua, chưa có VPS  ← T47
 ```
 
 ### Lệch spec cần lưu ý
 
-- **AcceptInvitation route**: spec định nghĩa `POST /invitations/accept` (không có workspace ID, token tự chứa context), nhưng hiện tại route là `POST /workspaces/:workspaceID/accept`. Cần thống nhất với FE hoặc điều chỉnh.
+- **AcceptInvitation route**: đã sửa thành `POST /invitations/accept` (token trong body, trả về workspace_id để FE redirect). ✅
 - **Email service**: spec yêu cầu NoOpEmailService (log only) cho Sprint 2, nhưng đã implement SMTP thật. Không ảnh hưởng correctness nhưng cần SMTP config trong env.
+- **Task Update/Delete/List (FE08/09/10)**: pulled từ T25 (Sprint 7) và T32 (Sprint 8) vào Sprint 2 để unblock FE. Các method cũ `Update(t *model.Task)` và `Delete(id uuid.UUID)` không có authorization check — đã fix, interface giờ là `UpdateTask(actorID, taskID, input)` và `DeleteTask(actorID, taskID)`.
+- **Task pagination**: `GET /tasks?workspace_id=&page=&page_size=` dùng OFFSET pagination (page/page_size) — đúng theo strategy (cursor-based chỉ dành cho message feed).
 
 ---
 

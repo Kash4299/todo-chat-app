@@ -82,6 +82,9 @@ func TestAuthMiddleware_Auth0_LinkRequired_Returns409(t *testing.T) {
 
 func (m *mockUserServiceForMW) GetByAuth0ID(auth0ID string) (*model.User, error) { return nil, nil }
 func (m *mockUserServiceForMW) GetByID(id uuid.UUID) (*model.User, error)        { return nil, nil }
+func (m *mockUserServiceForMW) UpdateProfile(userID uuid.UUID, displayName string, avatarURL, statusText *string) (*model.User, error) {
+	return nil, nil
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

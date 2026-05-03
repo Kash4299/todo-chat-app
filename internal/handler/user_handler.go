@@ -2,14 +2,17 @@ package handler
 
 import (
 	"crypto/subtle"
+	"errors"
 	"strings"
 
 	"github.com/Kash4299/todo-chat-app/internal/config"
+	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/middleware"
 	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/Kash4299/todo-chat-app/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type UserHandler struct {
@@ -70,6 +73,42 @@ func (h *UserHandler) GetMe(c *gin.Context) {
 	user, err := h.service.GetByID(userID)
 	if err != nil {
 		response.NotFound(c, response.CodeNotFound, "user not found")
+		return
+	}
+
+	response.OK(c, user)
+}
+
+type updateProfileRequest struct {
+	DisplayName string  `json:"display_name"`
+	AvatarURL   *string `json:"avatar_url"`
+	StatusText  *string `json:"status_text"`
+}
+
+func (h *UserHandler) UpdateProfile(c *gin.Context) {
+	userIDVal, _ := c.Get(middleware.UserIDContextKey)
+	userID, ok := userIDVal.(uuid.UUID)
+	if !ok || userID == uuid.Nil {
+		response.Unauthorized(c, response.CodeUnauthorized, "unauthenticated")
+		return
+	}
+
+	var req updateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, response.CodeInvalidInput, "invalid request body")
+		return
+	}
+
+	user, err := h.service.UpdateProfile(userID, req.DisplayName, req.AvatarURL, req.StatusText)
+	if err != nil {
+		switch {
+		case errors.Is(err, constants.ErrUserInvalidInput):
+			response.BadRequest(c, response.CodeInvalidInput, "invalid profile input")
+		case errors.Is(err, constants.ErrUserNotFound), errors.Is(err, gorm.ErrRecordNotFound):
+			response.NotFound(c, response.CodeNotFound, "user not found")
+		default:
+			response.InternalError(c)
+		}
 		return
 	}
 

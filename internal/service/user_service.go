@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/Kash4299/todo-chat-app/internal/constants"
@@ -30,6 +31,7 @@ type IUserService interface {
 	SyncAuth0User(auth0ID, email, displayName, avatarURL string, emailVerified bool) (*model.User, error)
 	GetByAuth0ID(auth0ID string) (*model.User, error)
 	GetByID(id uuid.UUID) (*model.User, error)
+	UpdateProfile(userID uuid.UUID, displayName string, avatarURL, statusText *string) (*model.User, error)
 }
 
 type UserService struct {
@@ -165,6 +167,66 @@ func (s *UserService) updateUserProfile(user *model.User, email, displayName, av
 		return nil
 	}
 	return s.userRepo.Update(user)
+}
+
+func (s *UserService) UpdateProfile(userID uuid.UUID, displayName string, avatarURL, statusText *string) (*model.User, error) {
+	if userID == uuid.Nil {
+		return nil, constants.ErrUserNotFound
+	}
+
+	displayName = strings.TrimSpace(displayName)
+	if len(displayName) > 100 {
+		return nil, constants.ErrUserInvalidInput
+	}
+
+	var normalizedAvatarURL, normalizedStatusText string
+	var updateAvatarURL, updateStatusText bool
+
+	if avatarURL != nil {
+		normalizedAvatarURL = strings.TrimSpace(*avatarURL)
+		if normalizedAvatarURL != "" {
+			parsed, err := url.ParseRequestURI(normalizedAvatarURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return nil, constants.ErrUserInvalidInput
+			}
+		}
+		updateAvatarURL = true
+	}
+
+	if statusText != nil {
+		normalizedStatusText = strings.TrimSpace(*statusText)
+		if len(normalizedStatusText) > 150 {
+			return nil, constants.ErrUserInvalidInput
+		}
+		updateStatusText = true
+	}
+
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	changed := false
+	if displayName != "" && user.DisplayName != displayName {
+		user.DisplayName = displayName
+		changed = true
+	}
+	if updateAvatarURL && user.AvatarURL != normalizedAvatarURL {
+		user.AvatarURL = normalizedAvatarURL
+		changed = true
+	}
+	if updateStatusText && user.StatusText != normalizedStatusText {
+		user.StatusText = normalizedStatusText
+		changed = true
+	}
+	if !changed {
+		return user, nil
+	}
+
+	if err := s.userRepo.Update(user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func providerFromSubject(subject string) (string, error) {

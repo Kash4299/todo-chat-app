@@ -476,3 +476,148 @@ func TestUserService_SyncAuth0User_IdentityCreateErrorThenRecoverByLookup(t *tes
 		t.Fatal("expected recovered user from identity lookup")
 	}
 }
+
+// ── UpdateProfile ─────────────────────────────────────────────────────────────
+
+func newTestUserSvc(userRepo *mockUserRepo) service.IUserService {
+	return service.NewUserService(userRepo, &mockUserIdentityRepo{})
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestUpdateProfile_NilUserID_ReturnsError(t *testing.T) {
+	svc := newTestUserSvc(&mockUserRepo{})
+	_, err := svc.UpdateProfile(uuid.Nil, "name", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil userID")
+	}
+}
+
+func TestUpdateProfile_DisplayNameTooLong_ReturnsInvalidInput(t *testing.T) {
+	svc := newTestUserSvc(&mockUserRepo{})
+	_, err := svc.UpdateProfile(uuid.New(), string(make([]byte, 101)), nil, nil)
+	if !errors.Is(err, constants.ErrUserInvalidInput) {
+		t.Fatalf("expected ErrUserInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateProfile_StatusTextTooLong_ReturnsInvalidInput(t *testing.T) {
+	svc := newTestUserSvc(&mockUserRepo{})
+	_, err := svc.UpdateProfile(uuid.New(), "", nil, strPtr(string(make([]byte, 151))))
+	if !errors.Is(err, constants.ErrUserInvalidInput) {
+		t.Fatalf("expected ErrUserInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateProfile_InvalidAvatarURL_ReturnsInvalidInput(t *testing.T) {
+	svc := newTestUserSvc(&mockUserRepo{})
+	_, err := svc.UpdateProfile(uuid.New(), "", strPtr("not-a-url"), nil)
+	if !errors.Is(err, constants.ErrUserInvalidInput) {
+		t.Fatalf("expected ErrUserInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateProfile_UserNotFound_ReturnsError(t *testing.T) {
+	userID := uuid.New()
+	svc := newTestUserSvc(&mockUserRepo{findByIDErr: gorm.ErrRecordNotFound})
+	_, err := svc.UpdateProfile(userID, "name", nil, nil)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected gorm.ErrRecordNotFound, got %v", err)
+	}
+}
+
+func TestUpdateProfile_PartialUpdate_OnlyDisplayName(t *testing.T) {
+	userID := uuid.New()
+	existing := &model.User{ID: userID, DisplayName: "old", AvatarURL: "https://old.example.com/a.png", StatusText: "hello"}
+	repo := &mockUserRepo{findByIDUser: existing}
+	svc := newTestUserSvc(repo)
+
+	got, err := svc.UpdateProfile(userID, "new name", nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.DisplayName != "new name" {
+		t.Fatalf("expected display name 'new name', got %q", got.DisplayName)
+	}
+	if got.AvatarURL != "https://old.example.com/a.png" {
+		t.Fatal("expected avatarURL to be unchanged when nil")
+	}
+	if repo.updateCalls != 1 {
+		t.Fatalf("expected 1 update call, got %d", repo.updateCalls)
+	}
+}
+
+func TestUpdateProfile_NoChange_SkipsUpdate(t *testing.T) {
+	userID := uuid.New()
+	existing := &model.User{ID: userID, DisplayName: "same", AvatarURL: "", StatusText: ""}
+	repo := &mockUserRepo{findByIDUser: existing}
+	svc := newTestUserSvc(repo)
+
+	_, err := svc.UpdateProfile(userID, "same", nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if repo.updateCalls != 0 {
+		t.Fatalf("expected 0 update calls when nothing changed, got %d", repo.updateCalls)
+	}
+}
+
+func TestUpdateProfile_FullUpdate_AllFields(t *testing.T) {
+	userID := uuid.New()
+	existing := &model.User{ID: userID, DisplayName: "old", AvatarURL: "", StatusText: ""}
+	repo := &mockUserRepo{findByIDUser: existing}
+	svc := newTestUserSvc(repo)
+
+	got, err := svc.UpdateProfile(userID, "new name", strPtr("https://cdn.example.com/avatar.png"), strPtr("busy"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.DisplayName != "new name" {
+		t.Fatalf("expected 'new name', got %q", got.DisplayName)
+	}
+	if got.AvatarURL != "https://cdn.example.com/avatar.png" {
+		t.Fatalf("expected avatar url, got %q", got.AvatarURL)
+	}
+	if got.StatusText != "busy" {
+		t.Fatalf("expected 'busy', got %q", got.StatusText)
+	}
+	if repo.updateCalls != 1 {
+		t.Fatalf("expected 1 update call, got %d", repo.updateCalls)
+	}
+}
+
+func TestUpdateProfile_ClearAvatarURL_UpdatesToEmpty(t *testing.T) {
+	userID := uuid.New()
+	existing := &model.User{ID: userID, DisplayName: "name", AvatarURL: "https://old.example.com/a.png", StatusText: "hi"}
+	repo := &mockUserRepo{findByIDUser: existing}
+	svc := newTestUserSvc(repo)
+
+	got, err := svc.UpdateProfile(userID, "", strPtr(""), nil)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.AvatarURL != "" {
+		t.Fatalf("expected avatarURL to be cleared, got %q", got.AvatarURL)
+	}
+	if repo.updateCalls != 1 {
+		t.Fatalf("expected 1 update call, got %d", repo.updateCalls)
+	}
+}
+
+func TestUpdateProfile_ClearStatusText_UpdatesToEmpty(t *testing.T) {
+	userID := uuid.New()
+	existing := &model.User{ID: userID, DisplayName: "name", AvatarURL: "", StatusText: "busy"}
+	repo := &mockUserRepo{findByIDUser: existing}
+	svc := newTestUserSvc(repo)
+
+	got, err := svc.UpdateProfile(userID, "", nil, strPtr(""))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.StatusText != "" {
+		t.Fatalf("expected statusText to be cleared, got %q", got.StatusText)
+	}
+	if repo.updateCalls != 1 {
+		t.Fatalf("expected 1 update call, got %d", repo.updateCalls)
+	}
+}

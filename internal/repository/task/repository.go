@@ -9,7 +9,8 @@ import (
 type ITaskRepository interface {
 	Create(task *model.Task) error
 	FindByID(id uuid.UUID) (*model.Task, error)
-	FindByWorkspace(workspaceID uuid.UUID) ([]model.Task, error)
+	FindByWorkspace(workspaceID uuid.UUID, offset, limit int) ([]model.Task, error)
+	CountByWorkspace(workspaceID uuid.UUID) (int64, error)
 	Update(task *model.Task) error
 	Delete(id uuid.UUID) error
 }
@@ -34,12 +35,23 @@ func (r *TaskRepository) FindByID(id uuid.UUID) (*model.Task, error) {
 	return &task, nil
 }
 
-func (r *TaskRepository) FindByWorkspace(workspaceID uuid.UUID) ([]model.Task, error) {
+func (r *TaskRepository) FindByWorkspace(workspaceID uuid.UUID, offset, limit int) ([]model.Task, error) {
 	var tasks []model.Task
-	if err := r.db.Where("workspace_id = ?", workspaceID).Order("position ASC, created_at DESC").Find(&tasks).Error; err != nil {
+	if err := r.db.Where("workspace_id = ?", workspaceID).
+		Order("position ASC, created_at DESC").
+		Offset(offset).Limit(limit).
+		Find(&tasks).Error; err != nil {
 		return nil, err
 	}
 	return tasks, nil
+}
+
+func (r *TaskRepository) CountByWorkspace(workspaceID uuid.UUID) (int64, error) {
+	var count int64
+	if err := r.db.Model(&model.Task{}).Where("workspace_id = ?", workspaceID).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (r *TaskRepository) Update(task *model.Task) error {
