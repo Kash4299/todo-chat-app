@@ -5,22 +5,23 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/Kash4299/todo-chat-app/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-type IWorkspaceMemberRoleService interface {
+type workspaceRoleGetter interface {
 	GetRole(workspaceID, userID uuid.UUID) (string, error)
 }
 
 type RBACMiddleware struct {
-	workspaceMemberService IWorkspaceMemberRoleService
+	workspaceService workspaceRoleGetter
 }
 
-func NewRBACMiddleware(workspaceMemberService IWorkspaceMemberRoleService) *RBACMiddleware {
+func NewRBACMiddleware(workspaceService service.IWorkspaceMemberService) *RBACMiddleware {
 	return &RBACMiddleware{
-		workspaceMemberService: workspaceMemberService,
+		workspaceService: workspaceService,
 	}
 }
 
@@ -45,18 +46,17 @@ func (m *RBACMiddleware) RequireWorkspaceRole(requiredRoles []string) gin.Handle
 		}
 
 		workspaceIDUUID, err := uuid.Parse(workspaceID)
-		if err != nil {
+		if err != nil || workspaceIDUUID == uuid.Nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid workspaceID"})
 			return
 		}
 
-		role, err := m.workspaceMemberService.GetRole(workspaceIDUUID, userIDUUID)
+		role, err := m.workspaceService.GetRole(workspaceIDUUID, userIDUUID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 				return
 			}
-
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 			return
 		}
@@ -66,8 +66,7 @@ func (m *RBACMiddleware) RequireWorkspaceRole(requiredRoles []string) gin.Handle
 			return
 		}
 
-		hasRole := slices.Contains(requiredRoles, role)
-		if !hasRole {
+		if !slices.Contains(requiredRoles, role) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 			return
 		}
