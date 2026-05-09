@@ -1,6 +1,6 @@
 # Chat System Design — T09 (WebSocket Architecture)
 
-> Sprint: 3 | Task: T09 (Design WebSocket architecture) | Status: Step 1 done
+> Sprint: 3 | Task: T09 (Design WebSocket architecture) | Status: Step 1-6 done, Step 7 (diagrams) next
 > Scale target: 1M concurrent users | Stack: Go + PostgreSQL + Kafka + Redis
 
 ---
@@ -10,11 +10,11 @@
 | Step | Topic | Status |
 |---|---|---|
 | 1 | Functional Requirements (events catalog) | ✅ Done |
-| 2 | Non-functional Requirements + Scale Estimation | ⏳ Pending |
-| 3 | Constraints & Assumptions | ⏳ Pending |
-| 4 | Identify Hard Parts | ⏳ Pending |
-| 5 | Design Options + Tradeoffs | ⏳ Pending |
-| 6 | Failure Modes | ⏳ Pending |
+| 2 | Non-functional Requirements + Scale Estimation | ✅ Done |
+| 3 | Constraints & Assumptions | ✅ Done |
+| 4 | Identify Hard Parts | ✅ Done |
+| 5 | Design Options + Tradeoffs | ✅ Done |
+| 6 | Failure Modes | ✅ Done |
 | 7 | Diagrams + Final Doc | ⏳ Pending |
 
 ---
@@ -655,18 +655,753 @@ Rule: invariant đúng @ N=2 và N=3 → induction → đúng @ N=30.
 
 ## Step 4 — Hard Parts
 
-> ⏳ Pending. Predicted:
-> - Connection state at 1M scale (memory, FD limits)
-> - Fan-out trong group lớn
-> - Cross-node routing (subscription state shared via Kafka/Redis)
-> - Reconnect-resync ordering
-> - Hot rooms (room có nhiều subscribers cùng lúc)
+### 4.0 Overview
+
+| HP | Hard Part | Liên quan #2.8 | Status |
+|---|---|---|---|
+| HP1 | Subscription state + cross-node routing | #8 | ✅ Resolved |
+| HP2 | Hot channel fan-out + tiered delivery | #4 | ✅ Resolved |
+| HP3 | Reconnect-resync ordering (no miss, no duplicate) | #8 + T23 | ✅ Resolved |
+| HP4 | Backpressure + slow consumer isolation | #3 + #4 | ✅ Resolved |
+
+---
+
+### 4.1 HP1 — Subscription state + cross-node routing
+
+**Problem statement**: 30 WS nodes, 1M users, 20M total subscriptions. User A trên node #1 send vào channel X — node #1 cần biết "channel X có subscribers ở những nodes nào?" để forward đúng.
+
+#### Đánh giá 3 chiến lược
+
+| Strategy | Mechanism | Verdict |
+|---|---|---|
+| (A) Central registry (Redis) | Mọi message query Redis trước khi route | ❌ Bottleneck Redis + SPOF + thêm latency |
+| (B) Broadcast-and-filter | Publish 1 topic chung, mọi node consume + filter | ❌ Waste bandwidth (90% drop) + CPU mọi node |
+| (C) Sharded by node | Hash channel_id → owner node, owner forward | ❌ Hot channel → owner overload, rebalance phức tạp |
+
+**→ Pure single strategy fails. Industry dùng HYBRID.**
+
+#### Solution: Hybrid (B + C via Kafka partitioning)
+
+```
+Kafka topic `chat.messages`: 100 partitions
+  partition = hash(channel_id) % 100
+  → channel_X luôn vào cùng 1 partition (ordering guarantee)
+
+30 WS nodes form 1 Kafka consumer group:
+  Mỗi node được Kafka tự assign ~3-4 partitions
+  → mỗi node "owner" 3-4 partitions, không phải 1
+
+Subscription state:
+  - Local: mỗi node maintain in-memory map
+      local_subs[channel_id] = [conn_id, conn_id, ...]
+  - Global: tất cả nodes share map (gossip qua Kafka)
+      global_subs[channel_id] = [node_id, node_id, ...]
+
+Update flow khi user subscribe/unsubscribe:
+  1. Update local_subs trên node user đang kết nối
+  2. Publish event `channel.subscribe`/`unsubscribe` lên Kafka topic
+     `chat.subscriptions` (separate topic, all nodes consume)
+  3. Tất cả nodes nhận event → cập nhật global_subs
+
+Message routing flow:
+  1. Node A nhận message từ user (local conn)
+  2. Publish vào `chat.messages` partition theo hash(channel_id)
+  3. Kafka deliver tới node B (consumer của partition đó)
+  4. Node B lookup global_subs[channel_X] → biết nodes target
+  5. Node B publish targeted broadcast vào topic `chat.broadcasts`
+     với header `target_nodes = [node #1, #7, #15]`
+  6. Các nodes consume `chat.broadcasts`, filter theo node_id của mình
+  7. Nodes target lookup local_subs[channel_X] → fan-out tới connections
+```
+
+#### Pros / Cons cuối cùng
+
+**Pros**:
+- Subscription state distributed (không central registry, không SPOF)
+- Kafka partition = natural sharding với rebalance tự động khi node up/down
+- Routing lookup là RAM access (nanosecond), không qua network
+- Ordering trong cùng channel guaranteed bởi Kafka partition
+
+**Cons accepted**:
+- Mỗi message thêm 1-2 hop Kafka (5-15ms latency)
+- Memory cost: mỗi node lưu global_subs cho TẤT CẢ 20M subscriptions
+  - Estimate: 20M × 50 B = 1 GB/node. Acceptable
+- Hot channel partition có thể overload (giải ở HP2)
+- Subscription state có thể stale ngắn (eventual consistency, ~ms-second). User mới subscribe có thể miss 1-2 message đầu — handle qua HP3 (reconnect-resync replay)
+
+#### Validation strategy
+
+Test invariant này ở scale nhỏ (3 VPS):
+- 3 nodes × 100 connections, 10 channels random distribution
+- User subscribe/unsubscribe events broadcast → verify global_subs đồng bộ trong <1s
+- Send message từ node 1 → verify chỉ nodes có subscribers nhận, các nodes khác drop
+- Kill 1 node → verify Kafka rebalance, subscription state recovered từ event log replay
+
+---
+
+### 4.2 HP2 — Hot channel fan-out + tiered delivery
+
+**Problem statement**: 1 channel có 5000 members × 50 msg/s = 250K events/s naive fan-out. Bandwidth + CPU cluster không xử lý nổi nhiều channel cỡ này.
+
+**Insight**: trong 5000 members, không phải ai cũng cần real-time. Phân tier theo **focus state per (user × channel)**:
+
+#### Tier definitions
+
+| Tier | Tín hiệu | Delivery |
+|---|---|---|
+| **ACTIVE** for channel X | Channel X foreground trên UI (1 connection cụ thể) | Real-time push mọi message, target <200ms |
+| **IDLE** for channel X | WS connected nhưng channel X không foreground | Batch push (count + last preview) mỗi 5-30s. Content fetched on-demand qua REST khi user mở channel |
+| **OFFLINE** | WS disconnected (heartbeat timeout 40-60s) | WS path: zero. Mobile push (FCM/APNs) cho mention/DM/task. On reconnect: replay qua HP3 |
+
+**Granularity**: tier sống ở **connection level**, không phải user level. Multi-device user: phone + laptop có 2 connections, mỗi cái tier riêng.
+
+#### State storage decision: in-RAM tại WS node giữ connection
+
+```
+Mỗi WS node maintain in-memory:
+  conn_focus_state[conn_id] = { 
+    focused_channel: channel_id,
+    last_focus_change: timestamp,
+    last_activity: timestamp
+  }
+
+Memory cost:
+  ~40 B/connection × 35K conn/node = 1.4 MB/node — trivial
+```
+
+**Tại sao không Redis/DB**:
+- Tab switch frequency cao: 1M users × 100 switch/day = 100M write/day → overwhelm Redis
+- Read-on-every-message: 50K msg/s × tier check = 50K Redis read/s → bottleneck
+- Focus state là **ephemeral** + **local to connection**: state follows compute principle. Không cần persistence vì recoverable từ client replay
+- Multi-device: 2 connections cùng user có tier khác nhau, cùng node hay khác node. State per-connection-per-node là natural fit
+
+**Tại sao không SPOF / consistency issues**:
+- Focus state chỉ relevant cho **node giữ connection đó** (delivery decision local)
+- Other nodes không cần biết tier của user X vì chúng không deliver tới user X
+- Node crash → connection đứt → client reconnect tới node khác + re-send focus_change → recovered
+
+#### Tier transition rules
+
+```
+IDLE → ACTIVE: client gửi `channel.focus_change(channel_id)` qua WS
+  Server flush pending batch buffer của channel đó tức thì:
+    - Nếu < 10 messages pending: push hết qua WS real-time
+    - Nếu ≥ 10 messages pending: discard buffer, client fetch qua REST GET /channels/X/messages
+
+ACTIVE → IDLE: client gửi `channel.focus_change(other_channel)` hoặc `channel.blur`
+  Server cancel real-time queue cho channel đó, switch sang batch mode
+
+* → OFFLINE: heartbeat timeout (40-60s)
+  Trigger mobile push notification path cho important events (mention, DM, task)
+
+OFFLINE → ONLINE: client reconnect
+  conversation.synced replay missed events (HP3)
+  Default tier = idle cho mọi channel cho đến khi nhận focus_change
+```
+
+#### Detection signals (combined, không single-source)
+
+Tier inference dùng **OR** giữa client signal + server inference (vì mobile platform constraint):
+
+```
+ACTIVE iff:
+  (client sent channel.focus_change recently)
+  OR (user sent message into channel within 60s)
+  OR (user sent read receipt for channel within 60s)
+  AND (last_activity within 5 min)  // auto-downgrade nếu không có activity
+```
+
+Lý do dùng OR + multiple signals:
+- iOS suspend JS aggressively → client không gửi được focus_change → server tự deduce
+- Android doze mode → tương tự
+- PWA tab background → JS throttled → unreliable
+
+#### Sticky session (user pinned to node)
+
+Pattern: **consistent hashing trên user_id ở Load Balancer layer**.
+
+```
+ALB/NLB config:
+  hash(user_id từ JWT) % node_count → target node
+  
+Khi node up/down: rebalance ~3% connections (theo consistent hashing properties).
+Reconnect → cùng/khác node → client re-send focus_change → state restored.
+```
+
+Alternative: sticky cookie. Nhưng WS handshake initial khó set cookie → consistent hashing simpler.
+
+#### Quantify reduction
+
+```
+Channel "general" 5000 members, 50 msg/s:
+
+Naive (không tier): 50 × 5000 = 250,000 ev/s
+
+Với tiering (realistic distribution của 5000 members):
+  ~4% active for #general    : 200 × 50          = 10,000 ev/s push
+  ~36% idle for #general     : 1800 × 1 batch/10s = 180 ev/s push
+  ~60% offline               : 0 ev/s push (mobile push path riêng cho mention)
+  ─────────────────────────────────────────────────
+  Total                                          ≈ 10,180 ev/s
+
+Reduction: 96% saved.
+```
+
+#### Cons accepted
+
+- Race condition trong tier transition: ~100ms window có thể nhận message theo tier sai. Acceptable cho UX (user thấy badge update vs real-time push).
+- Default-to-idle khi reconnect: user mở app, 1-2s đầu nhận theo idle batch thay vì real-time. Sau khi nhận focus_change, switch ngay.
+- Client-side battery cost: focus_change events thường xuyên qua WS. Mitigation: debounce 1s tại client.
+- Server-side inference rules tăng complexity (state machine với multiple signals).
+
+#### Validation strategy
+
+Test invariants ở scale nhỏ:
+- 2 nodes × 100 conn × 5 channels. User focus #channel_A, send message từ user khác → verify nhận trong <200ms (active tier)
+- Cùng user blur channel_A focus channel_B → verify trong vòng 1s tier switched, message channel_A vào batch
+- Disconnect WS giữa session → verify tier → offline trong 40-60s
+- Reconnect → verify default idle, sau focus_change → active
+
+---
+
+### 4.3 HP3 — Reconnect-Resync Ordering
+
+**Problem statement**: User offline 30s, reconnect. Trong window đó server đã publish messages 103-105 vào channel Bob subscribed. Phải đảm bảo Bob nhận:
+- **No miss**: đủ 103, 104, 105
+- **No duplicate**: không nhận lại 100, 101, 102 (đã có)
+- **Correct order**: 103 < 104 < 105 < new live messages
+- **Low latency**: resync xong < 1s với gap nhỏ
+
+#### Cursor ownership: client-tracked, không server-tracked
+
+**Decision**: client lưu cursor, gửi khi reconnect. Server stateless cho per-user delivery position.
+
+**Lý do**:
+- Server-tracked = mỗi event 1 write-ack/user → 750K events/s × 50 fan-out = 37.5M write/s. Impossible.
+- Client biết exact những gì đã render. Đó là source of truth.
+- Server stateless = scale linear. Khôi phục từ client là acceptable cost.
+
+**Cursor format** — per-event, không per-message:
+
+```js
+{
+  channel_a: { last_event_id: 102 },
+  channel_b: { last_event_id: 99 },
+  ...
+}
+```
+
+Cursor là `event_id` (monotonic per-channel) chứ không `message_id`. Lý do: replay phải cover tất cả events (reactions, edits, member joins, …), không chỉ messages. Discord pattern.
+
+**Storage tại client**: IndexedDB (web) hoặc SQLite (mobile). Persist across page reload + app restart.
+
+#### Reconnect flow — dual-pump (live subscribe + gap fetch parallel)
+
+```
+T=20  Bob reconnect WS
+T=20  WS handshake payload: { cursors: { channel_a: 102, ... } }
+      Server validate cursors (xem cap rules below)
+      Server subscribe Bob vào live broadcast → push events 106+ ngay
+      Client buffer 106+ trong memory (CHƯA render)
+      
+T=20  Client trigger REST:
+      GET /channels/A/messages?after=102&limit=100
+      
+T=21  REST returns: { events: [103..106], next_cursor: 106 }
+      
+T=21  Client merge:
+        gap_buffer = [103, 104, 105, 106] (từ REST)
+        live_buffer = [106, 107, 108]      (từ WS)
+        merged = unique by event_id, sort by event_id
+        → [103, 104, 105, 106, 107, 108]
+      Render in order
+      Update cursor → 108
+
+T=21  Tiếp tục live mode bình thường
+```
+
+**Tại sao dual-pump win**:
+- Live messages không miss thêm trong lúc REST đang fetch
+- Latency-to-first-new-message = WS RTT, không phụ thuộc REST
+- WS lane chỉ làm real-time (đơn giản hơn)
+- REST tận dụng được HTTP caching (Redis/CDN edge cho recent messages)
+
+#### Dedup mechanism (explicit)
+
+Race condition khi event 106 vừa persisted vừa pushed live:
+- Client nhận 106 qua WS (live subscribe)
+- Client nhận 106 qua REST (gap fetch)
+
+Solution: client-side dedup theo `event_id`:
+
+```python
+seen_ids: Set[event_id] = {}
+def merge_event(e):
+  if e.id in seen_ids: return
+  seen_ids.add(e.id)
+  insert_in_order(e)
+```
+
+O(1) check. Trivial nhưng MUST be explicit.
+
+#### Server-side cap rules (untrusted client)
+
+Client cursor không thể trust unconditionally. Risks:
+- localStorage cleared → cursor missing
+- Malicious cursor (e.g., cursor=0) → DoS via mass replay
+- Cursor older than retention → meaningless
+
+**Cap rules**:
+
+```
+1. Replay window: cursor must be > (current_max_event_id - retention_window)
+   - retention = 7 days. Beyond → 410 Gone, client full refresh
+   
+2. Per-channel limit: max 1000 events per replay request
+   - Beyond → cursor pagination (next_cursor in response)
+
+3. Per-reconnect total: max 30s wall-clock for all gap fetches
+   - Beyond → return partial, flag missing_history=true
+   
+4. Cursor validation: must be valid event_id format + signed (HMAC)
+   - Prevent forgery
+```
+
+**Fallback khi no cursor**:
+- New device / fresh install
+- localStorage cleared
+- Cursor expired
+
+→ Server returns last 50 events per channel + flag `partial_history=true`. Client UI shows "Load earlier" button.
+
+#### Pagination cho gap lớn
+
+User offline 1h → 1000+ events to replay. Single REST response không khả thi.
+
+```
+GET /channels/A/messages?after=102&limit=100
+  Response: { events: [103..202], next_cursor: 202, has_more: true }
+
+GET /channels/A/messages?after=202&limit=100
+  Response: { events: [203..302], next_cursor: 302, has_more: true }
+
+... loop until has_more=false OR client detects overlap với WS buffer
+```
+
+Tích hợp với T17 (cursor-based pagination message history).
+
+#### Multi-device cursor coordination
+
+Bob có phone (cursor 100) + laptop (cursor 102). Phone reconnect → cursor lệch.
+
+**Decision**: cursor per-device, không sync. Mỗi device có position riêng.
+
+Lý do:
+- Phone read 100 không đồng nghĩa Bob "đã đọc" 102 trên cả phone
+- UX: phone hiện 2 unread messages (101, 102) là correct
+- Cross-device "read state" sync là feature riêng (qua `session.synced` event), không phải cursor sync
+
+#### Pros / Cons cuối cùng
+
+**Pros**:
+- Server stateless cho per-user delivery → scale linear
+- Dual-pump → low latency to first new message
+- WS + REST tách concerns rõ ràng
+- Industry-standard (Slack, Discord match)
+
+**Cons accepted**:
+- Client phải implement merge + dedup logic (frontend complexity)
+- Cursor lost → fallback partial history (~50 events)
+- Replay window 7 days = TTL on Kafka topic + DB partition
+- Edge cases: clock skew giữa client devices, but event_id monotonic giải quyết
+
+#### Validation strategy
+
+Test invariants ở scale nhỏ:
+- 2 nodes × 50 conn × 3 channels. Disconnect 1 client 30s. Trong window publish 10 events. Reconnect → verify đủ 10 events, đúng thứ tự, không dupe.
+- Stress: client gửi cursor=0 → verify server reject với 410, không attempt mass replay
+- Stress: 1000 events gap → verify pagination, total replay < 30s
+- Multi-device: 2 connections same user, different cursors → verify mỗi cái resync độc lập
+
+---
+
+### 4.4 HP4 — Backpressure + Slow Consumer Isolation
+
+**Problem statement**: 1 channel có 200 active subscribers, server push 100 ev/s mỗi user. Trong 200 users, 1 user "slow" (mạng yếu, thiết bị chậm) chỉ tiêu thụ 5 ev/s. Server phải buffer 95 ev/s dồn lại cho user đó. Sau 60s: 5,700 events tích tụ → memory leak path.
+
+2 invariants phải giữ:
+1. Slow user không **block** 199 users khác trong cùng channel (head-of-line blocking)
+2. Buffer của slow user không grow vô hạn → OOM crash node
+
+#### Strategy: Bounded buffer (A) + Disconnect on threshold (D)
+
+**Tại sao A + D win, không (B) lossy drop, không (C) tier downgrade**:
+
+| Strategy | Verdict | Lý do |
+|---|---|---|
+| (A) Bounded buffer | ✅ | Hard cap protects memory |
+| (B) Lossy drop | ❌ | Phá monotonic event_id sequence → break HP3 cursor invariant |
+| (C) Slow tier downgrade | ⚠️ | Defensible nhưng add state machine complexity. Reuse HP3 đơn giản hơn |
+| (D) Disconnect on cap | ✅ | Recovery via HP3 resync — pipeline đã có sẵn |
+
+**Cross-HP consistency check**: B vi phạm HP3 invariant (client-tracked cursor cần monotonic event_id stream). Khi 1 hard part mâu thuẫn invariant của hard part khác, **reject** giải pháp đó.
+
+#### Threshold rules (multi-dimensional)
+
+Buffer cap không phải single number. Hybrid threshold:
+
+```
+Disconnect IF any of:
+  buffer_count        > 1000 events
+  buffer_bytes        > 5 MB
+  last_write_age      > 10 seconds (write blocked > 10s)
+  total_blocked_age   > 30 seconds (cumulative slow time)
+```
+
+Lý do mỗi dimension:
+- **Count**: bound number of pending events (typing storms)
+- **Bytes**: bound memory (1 large message với image embed có thể 500KB)
+- **Last write age**: detect stalled connection nhanh (network blackhole)
+- **Total blocked age**: prevent flapping (slow on/off cycles)
+
+#### Detection mechanism (Go-specific)
+
+Pattern: non-blocking send + write deadline.
+
+```go
+type Connection struct {
+    out             chan []byte    // buffered, size 1000
+    bytesQueued     atomic.Int64
+    lastWriteTime   atomic.Int64
+    blockedDuration atomic.Int64
+}
+
+func (c *Connection) trySend(msg []byte) bool {
+    if c.bytesQueued.Load() + int64(len(msg)) > 5_000_000 {
+        c.disconnect("buffer_bytes_exceeded")
+        return false
+    }
+    select {
+    case c.out <- msg:
+        c.bytesQueued.Add(int64(len(msg)))
+        return true
+    default:
+        c.disconnect("buffer_count_exceeded")
+        return false
+    }
+}
+
+// Write loop:
+conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+if err := conn.WriteMessage(...); err != nil {
+    c.disconnect("write_timeout")
+}
+```
+
+#### Recovery via HP3 (cross-HP reuse)
+
+```
+1. Server detect slow consumer → close WS với code 4408 (write timeout)
+2. Client receive close → exponential backoff reconnect (1s, 2s, 4s, ... với jitter)
+3. Client reconnect với cursor cuối cùng đã render
+4. HP3 resync flow: live subscribe + REST gap fetch + merge
+5. Catch up xong → resume normal operation
+```
+
+**Không có new mechanism**. Pure reuse HP3.
+
+#### Reconnect storm protection
+
+Mass event (ISP outage, bad deploy) có thể gây 1000+ disconnects đồng thời → thundering herd reconnect.
+
+Mitigation:
+- **Client-side**: exponential backoff với jitter
+  ```
+  retry_delay = min(60s, base * 2^attempt) + random(0, 1000ms)
+  ```
+- **Server-side**: admission control
+  - Reject reconnect (HTTP 503) khi cluster capacity > 85%
+  - Per-IP rate limit: max 5 reconnect/minute
+- **Load balancer**: connection rate limit + DDoS protection
+
+→ Disconnect-based recovery chỉ work cho **isolated slow consumer**. Mass event = different problem (treat ở Step 6 Failure Modes).
+
+#### Pros / Cons cuối cùng
+
+**Pros**:
+- Memory bounded, không OOM
+- Slow user không block others (head-of-line blocking eliminated)
+- Reuse HP3 → không add new mechanism
+- Cross-HP invariant preserved (monotonic event_id)
+- Industry-standard pattern (Slack, Discord)
+
+**Cons accepted**:
+- Slow user bị disconnect → reconnect cost (~500ms perceived)
+- Reconnect storm risk (mitigated bằng backoff + admission control)
+- Không phân biệt "transient slow" vs "persistent slow" — cả 2 đều disconnect. Chấp nhận vì threshold tuning đã accommodate transient (10s write timeout = forgiving)
+
+#### Validation strategy
+
+Test ở scale nhỏ:
+- 1 node × 100 conn. 1 connection inject `time.Sleep(5s)` mỗi write → verify disconnect sau 10s, 99 connections khác unaffected
+- 1000 messages burst tới slow conn → verify buffer bounded, không OOM
+- Mass disconnect simulation: kill 50% connections cùng lúc → verify reconnect spread đều theo backoff, không thundering herd
+
+---
+
+## Step 4 — Tổng kết
+
+✅ **HP1**: Subscription + routing — Hybrid Kafka partitioned + per-node consumer group
+✅ **HP2**: Hot channel fan-out — Tiered delivery (active/idle/offline) với state local per-connection
+✅ **HP3**: Reconnect-resync — Client-tracked cursor + dual-pump (live subscribe + REST gap fetch)
+✅ **HP4**: Backpressure — Bounded buffer + disconnect-on-threshold + HP3 recovery reuse
+
+**Cross-HP consistency**:
+- HP1 routing → HP2 fan-out delivery decision tại target node
+- HP2 tier state local → HP4 không cần redis lookup khi check buffer
+- HP3 cursor → HP4 recovery mechanism
+- HP4 disconnect không drop messages → HP3 invariant preserved
+
+Architecture coherent. Sẵn sàng Step 5.
 
 ---
 
 ## Step 5 — Design Options + Tradeoffs
 
-> ⏳ Pending.
+> Consolidation các alternatives đã được consider + reject ở Step 1-4. Mục đích: future reader (T10 implementer, code reviewer, người onboard sau) hiểu **WHY** decisions đã pick, không chỉ **WHAT** picked.
+
+### 5.1 WebSocket library
+
+| Option | Pros | Cons | Verdict |
+|---|---|---|---|
+| **`gorilla/websocket`** | Idiomatic Go, ecosystem mature, ~36 KB/conn, đủ cho 35K conn/node | Goroutine-per-connection cost cao ở >100K conn/node | ✅ **Pick** |
+| `gobwas/ws` + epoll | ~5 KB/conn, có thể 200K conn/node | Code phức tạp hơn, ít middleware, debug khó | ❌ Defer |
+| `nhooyr/websocket` | Modern API, simpler than gorilla | Smaller ecosystem | ❌ Defer |
+
+**Decision rule**: switch sang `gobwas/ws` ONLY khi load test (T45) chứng minh RAM bound, không phải network/CPU bound. Trên VPS test (network bound 3K), switch không cải thiện.
+
+### 5.2 Message send pattern
+
+| Pattern | Mechanism | Pros | Cons | Verdict |
+|---|---|---|---|---|
+| **A pure** | All C→S qua WS | 1 transport, low latency | Edit/delete CRUD heavy phải reimplement HTTP semantics | ❌ |
+| **B pure** | All C→S qua REST, S→C qua WS | REST middleware ecosystem | 2 transports, ordering phức tạp | ❌ |
+| **Hybrid** | Hot-path WS, rare/CRUD REST | Best of both | Phải articulate criteria | ✅ **Pick** |
+
+**Hybrid criteria** (committed Step 1.1):
+- WS: hot-path messages, typing, reactions, presence, connection lifecycle
+- REST: CRUD operations rare/idempotent, business resources với complex authorization (tasks, channels), bulk fetches
+
+### 5.3 HP1 — Subscription routing
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| (A) Central registry (Redis) | Query Redis per message | ❌ Bottleneck Redis, SPOF, +5ms latency |
+| (B) Broadcast-and-filter | All nodes consume all, filter local | ❌ Waste 90% bandwidth, CPU mọi node |
+| (C) Sharded by node | Hash channel → owner node | ❌ Hot channel = owner overload, rebalance khó |
+| **Hybrid Kafka partitioned** | Kafka 100 partitions, consumer group 30 nodes, local subs map + global subs gossip | ✅ **Pick** |
+
+**Why hybrid wins**:
+- Kafka rebalance handles node up/down (vs strict (C))
+- Subscription state distributed (vs (A))
+- Targeted broadcast (vs (B) waste)
+- Hot channel still có vấn đề nhưng giải bằng HP2, không phải routing
+
+### 5.4 HP2 — Tier state storage
+
+| Option | Mechanism | Pros | Cons | Verdict |
+|---|---|---|---|---|
+| Redis | Central tier state | Cross-node visibility | 100M write/day overhead, read-on-every-message bottleneck | ❌ |
+| **In-RAM per node** | State follows connection | Zero external IO, scale linear | State lost trên crash (recovered từ client replay) | ✅ **Pick** |
+| Per-user DB column | Persistent | Survives crash | DB write storm | ❌ |
+
+**Principle**: state follows compute. Vì connection pinned 1 node, tier state ở cùng node = natural fit. Recovery via client replay là acceptable cost.
+
+### 5.5 HP3 — Cursor ownership
+
+| Option | Mechanism | Pros | Cons | Verdict |
+|---|---|---|---|---|
+| Server-tracked | Server lưu last_delivered_id per (user, channel) | Authoritative | 37.5M write/s — impossible | ❌ |
+| **Client-tracked** | Client lưu cursor, send on reconnect | Server stateless, scale linear | Client trust issue (mitigated bằng cap rules) | ✅ **Pick** |
+| Per-user single global cursor | 1 cursor cho all channels | Simple | Cannot resync individual channel granularly | ❌ |
+
+### 5.6 HP3 — Replay transport
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| WS replay only | Reconnect → WS pumps gap before live | ❌ Sequential blocks live, no caching |
+| REST replay only | Wait for REST then subscribe live | ❌ Higher latency to first new message |
+| **Dual-pump (WS live + REST gap parallel)** | Live subscribe immediately + REST gap concurrent + client merge | ✅ **Pick** |
+
+**Why dual-pump**: latency-to-first-new-message = WS RTT (không phụ thuộc REST). REST tận dụng HTTP cache. WS lane chỉ làm real-time.
+
+### 5.7 HP4 — Backpressure strategy
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| (A alone) Bounded buffer block | Block writes khi đầy | ❌ Block 1 = block all subscribers (head-of-line) |
+| (B) Lossy drop | Drop oldest hoặc selective | ❌ Phá HP3 monotonic event_id invariant |
+| (C) Tier downgrade | Slow → idle tier | ⚠️ State machine complexity, unclear recovery boundary |
+| **(A+D) Bounded + disconnect** | Hard cap → close socket → HP3 resync recovery | ✅ **Pick** |
+
+**Why A+D wins**: cross-HP consistency (preserve HP3 invariant), reuse existing mechanism (HP3 resync), clean failure semantics, industry-standard.
+
+### 5.8 Storage partitioning
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| Single table | All messages 1 PostgreSQL table | ❌ 28 TB/year unmanageable, VACUUM/backup giờ |
+| **Time partition (monthly) + cold S3** | Hot 2 months on RDS, older → S3 | ✅ **Pick** (T16) |
+| Channel-based shard | 1 table per N channels | ⚠️ Defer — adds complexity, time partition đủ |
+| External (Cassandra/ScyllaDB) | Discord pattern | ❌ Defer — over-engineering cho 1M scale |
+
+### 5.9 Cross-cutting: when alternatives become valid
+
+Document để future revisit:
+
+| Switch trigger | New choice | Reason |
+|---|---|---|
+| Load test (T45) shows RAM bound, không network bound | gorilla → gobwas/ws | Memory efficiency win matters |
+| Concurrent > 5M | Multi-region + active-active | Single-region latency too high cho global users |
+| Active fraction > 60% (high engagement) | More WS nodes hoặc Rust/Elixir gateway | Go GC pause becomes critical |
+| Group size avg > 200 (community-style app) | Sharded fan-out worker pool | Hot channel ngày càng phổ biến |
+| Storage > 100 TB | Cassandra/ScyllaDB cho messages | PostgreSQL bottleneck on scan-heavy queries |
+
+---
+
+## Step 6 — Failure Modes
+
+> Mỗi failure mode: **detection** (phát hiện thế nào) + **immediate behavior** (system làm gì ngay) + **recovery** (tự động hoặc manual) + **prevention** (giảm chance xảy ra).
+
+### 6.1 Single WS node death
+
+| Aspect | Detail |
+|---|---|
+| **Triggers** | Crash, OOM, deploy restart, kernel panic, EC2 instance retired |
+| **Detection** | Health check fail (LB), Kafka consumer lag spike, Prometheus alert `up == 0` |
+| **Impact** | ~35K connections (3.5% of total) đột ngột mất |
+| **Immediate** | TCP RST → client detect within ~10s. Kafka rebalance partitions sang nodes còn lại trong ~30s |
+| **Recovery (auto)** | Client exponential backoff reconnect tới node khác (consistent hashing redirect). HP3 resync replay missed events |
+| **Manual** | Replace dead node (T51 ECS auto-recreates). Verify Kafka rebalance complete |
+| **Prevention** | Health check + auto-restart. Resource limits (memory cap to prevent OOM). Graceful shutdown handler (drain connections trước khi stop) |
+| **Blast radius** | 3.5% users disrupted ~30s. Nếu thundering herd, có thể spread |
+
+### 6.2 Multiple WS nodes die (cascading)
+
+| Aspect | Detail |
+|---|---|
+| **Triggers** | Bad deploy, shared dependency failure, AZ outage |
+| **Detection** | Multiple `up == 0` alerts, capacity utilization spike |
+| **Impact** | 10-50% users disrupted |
+| **Immediate** | Admission control (Step 4.4) reject reconnect khi capacity > 85%. Client backoff with jitter prevents thundering herd |
+| **Recovery (auto)** | Auto-scaling spawn new nodes (T50). Healthy nodes carry extra load (designed at 75% capacity = headroom) |
+| **Manual** | Identify root cause (deploy rollback, AZ failover, dependency restore). Page oncall (T52) |
+| **Prevention** | Multi-AZ deployment. Canary deploys. Circuit breakers cho shared dependencies |
+
+### 6.3 Kafka cluster issues
+
+| Sub-failure | Detail |
+|---|---|
+| **1 broker down (out of 3)** | Replication factor 3 → no data loss. Leader election ~10s. Producer/consumer auto-failover. **Impact**: brief latency spike |
+| **2 brokers down** | Replication degraded, partition unavailable nếu both replicas mất. **Impact**: message publish fail, broadcast stuck. **Mitigation**: WS server fallback to local in-memory pub/sub (only same-node delivery) |
+| **All brokers down** | Full Kafka outage. **Mitigation**: persist messages tới local buffer (1-5 min), retry publish. **Acceptance**: cross-node fan-out tạm dừng, same-node still works. **Manual**: restore Kafka MSK |
+
+**Detection**: Prometheus `kafka_brokers_online`, consumer lag explosion, producer error rate
+
+**Recovery**: Kafka self-recover after cluster restored. Reconcile messages từ local buffer (deduped via event_id)
+
+### 6.4 PostgreSQL failures
+
+| Sub-failure | Detail |
+|---|---|
+| **Primary down** | Auto-failover tới replica (~30s với RDS Multi-AZ). **Mitigation during failover**: writes queued ở Kafka, persist worker retry sau khi promotion done. **Critical path unaffected** vì DB write off critical path (Step 4.1, decision T11) |
+| **Replica lag** | Stale reads cho history fetch. **Mitigation**: route hot reads (recent messages < 5 min) tới primary, cold tới replica (T42) |
+| **Disk full** | Write fail, partition rotation chậm. **Mitigation**: alert at 80% utilization, expand storage. **Prevention**: monitoring + automatic partition cleanup (T16) |
+| **Slow query (lock)** | DB CPU spike, write latency tăng. **Mitigation**: timeout config, slow query log, EXPLAIN ANALYZE periodically (T45) |
+
+### 6.5 Redis failures
+
+| Sub-failure | Detail |
+|---|---|
+| **Redis cluster node down** | Cluster mode auto-failover. ~10s impact. **Mitigation**: presence stale during failover (acceptable) |
+| **Full Redis outage** | Presence not updated, rate limit không enforce, idempotency check fail. **Mitigation**: degrade gracefully — presence shows last-known, rate limit fails open (or fails closed if security critical), idempotency relaxed (accept duplicates, dedup downstream) |
+| **Redis memory full** | Eviction kicks in (LRU). **Mitigation**: TTL on all keys, capacity alert |
+
+### 6.6 Network partition
+
+| Partition type | Detail |
+|---|---|
+| **WS node ↔ Kafka** | Node cannot publish/consume. **Detection**: Kafka client connection error. **Behavior**: node drains connections (let clients reconnect tới node khác có Kafka). Node self-restart sau 60s |
+| **WS node ↔ Redis** | Cannot check presence/idempotency. **Behavior**: degrade to local cache (5min TTL), ngừng new connection authentication temporarily |
+| **WS node ↔ PostgreSQL** | Cannot read history (REST gap fetch fails). **Behavior**: 503 cho REST endpoints affected, WS live still works (DB off critical path) |
+| **WS node ↔ WS node** | Khi cluster split brain. **Behavior**: Kafka mediates anyway, không có direct node-to-node, partition không impact |
+| **Cross-AZ partition** | Multi-AZ deploy. **Behavior**: each AZ self-sufficient với local Kafka brokers. **Recovery**: rejoin via Kafka MirrorMaker (cross-region) hoặc auto-rejoin same region |
+
+### 6.7 Hot channel storm
+
+| Aspect | Detail |
+|---|---|
+| **Trigger** | Channel với 5000 members, breaking news → 500 msg/s burst |
+| **Detection**: Prometheus per-channel msg rate, cardinality alert | |
+| **Impact** | Kafka partition serving channel overloaded. WS nodes consuming partition CPU spike |
+| **Mitigation** | HP2 tiered delivery already handles 96% reduction. Additional: **rate-limit per channel** at producer level (e.g., max 100 msg/s per channel — drop excess back to client với "rate limited, please slow down") |
+| **Manual** | Identify hot channel. Có thể tạm thời split channel thành multiple Kafka partitions (manual rebalance) |
+
+### 6.8 Mass reconnect (thundering herd)
+
+| Aspect | Detail |
+|---|---|
+| **Trigger** | Internet backbone outage, DNS failure, bad deploy → 1M reconnect đồng thời |
+| **Detection** | Connection rate spike, LB queue length |
+| **Mitigation** | Client exponential backoff với jitter. Server admission control (reject 503 khi capacity > 85%). Per-IP connection rate limit |
+| **Recovery** | Connections re-establish gradually over 5-10 min as backoff timers fire spread out |
+
+### 6.9 Slow consumer (single user)
+
+Đã giải ở HP4. Bounded buffer + disconnect on threshold + HP3 resync recovery.
+
+### 6.10 Malicious client
+
+| Attack | Mitigation |
+|---|---|
+| **Forged cursor (cursor=0 → mass replay)** | Server cap rules (Step 4.3): retention window + per-channel limit + signed cursor (HMAC) |
+| **DDoS reconnect spam** | Per-IP rate limit (5 reconnect/min). DDoS protection ở LB layer (AWS Shield) |
+| **Auth token reuse / replay** | JWT có expiry (~15 min). Replay window short. Cookie HttpOnly + Secure |
+| **Slow loris (open conn, never read)** | Buffer cap + write timeout disconnect (HP4) |
+| **Spam messages** | Rate limit per user (Sliding window Redis — T41) |
+
+### 6.11 GC pause / memory pressure
+
+| Aspect | Detail |
+|---|---|
+| **Trigger** | High allocation rate, memory near cap → GC pause spike (50-500ms) |
+| **Detection** | Prometheus `go_gc_pause_seconds`, p99 latency spike correlation |
+| **Impact** | All connections on node experience latency blip during pause |
+| **Mitigation** | `GOGC=200` (less frequent, longer pauses but better throughput). Buffer pooling (sync.Pool). Avoid unbounded allocations |
+| **Long-term** | Profile pprof at scale, optimize hot paths. Switch to gobwas/ws if memory pressure unsolvable (Step 5.1 trigger) |
+
+### 6.12 Message persistence failure (DB write error)
+
+| Aspect | Detail |
+|---|---|
+| **Trigger** | DB primary down, disk full, replication broken |
+| **Detection** | Persist worker error rate, Kafka consumer lag (worker can't commit) |
+| **Behavior** | Messages already in Kafka. Persist worker retries with exponential backoff |
+| **Critical path unaffected** | WS broadcast vẫn work (Kafka đã có message). Chỉ DB write delayed. User vẫn thấy message real-time |
+| **Recovery** | DB restored → worker drain Kafka backlog. Acceptable: history fetch trong window đó may be stale ~5 min |
+
+---
+
+### 6.13 Failure prevention principles (cross-cutting)
+
+1. **Stateless WS tier**: state in Kafka/Redis hoặc client → node death = no data loss
+2. **Async persistence**: DB off critical path → DB issues không block real-time
+3. **Circuit breakers**: shared dependencies (Redis, DB) timeout fast, degrade gracefully
+4. **Graceful degradation per-feature**: per-feature SLA (Step 2.7) cho phép search/notification down mà send/receive vẫn work
+5. **Replay-able state**: HP3 cursor + Kafka retention + idempotent operations → recovery from any partial state
+6. **Backoff + jitter**: prevent thundering herd at every layer (client, server, infrastructure)
+7. **Multi-AZ redundancy**: any single failure = limited blast radius (per Step 3.7 deployment)
+8. **Monitoring-first** (T52): every failure mode above must have detection + alert. "Untestable failure" = "untestable recovery"
 
 ---
 
