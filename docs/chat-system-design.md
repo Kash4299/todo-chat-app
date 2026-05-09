@@ -1,6 +1,6 @@
 # Chat System Design — T09 (WebSocket Architecture)
 
-> Sprint: 3 | Task: T09 (Design WebSocket architecture) | Status: Step 1-6 done, Step 7 (diagrams) next
+> Sprint: 3 | Task: T09 (Design WebSocket architecture) | Status: ✅ COMPLETE — ready for T10 implementation
 > Scale target: 1M concurrent users | Stack: Go + PostgreSQL + Kafka + Redis
 
 ---
@@ -15,7 +15,7 @@
 | 4 | Identify Hard Parts | ✅ Done |
 | 5 | Design Options + Tradeoffs | ✅ Done |
 | 6 | Failure Modes | ✅ Done |
-| 7 | Diagrams + Final Doc | ⏳ Pending |
+| 7 | Diagrams + Final Doc | ✅ Done |
 
 ---
 
@@ -1413,4 +1413,486 @@ Document để future revisit:
 
 ## Step 7 — Diagrams + Final Doc
 
-> ⏳ Pending.
+> Visual layer của design. 3 phần: C4 architecture (3 levels) + Sequence diagrams (5 critical flows) + Final review checklist.
+
+### 7.1 C4 Level 1 — System Context
+
+Vị trí KashFlow Chat trong ecosystem rộng + external dependencies.
+
+```mermaid
+flowchart TB
+    user_web["👤 User<br/>(Web Browser)"]
+    user_mobile["📱 User<br/>(Mobile App)"]
+
+    subgraph kashflow["KashFlow Chat System"]
+        chat["Chat + Task Platform<br/>1M concurrent users"]
+    end
+
+    auth0["🔐 Auth0<br/>(Identity Provider)"]
+    fcm["📨 FCM/APNs<br/>(Push Notifications)"]
+    email["📧 SendGrid/SES<br/>(Email Notifications)"]
+    s3["📦 S3 + CloudFront<br/>(Media Storage)"]
+
+    user_web -- "WSS + HTTPS" --> chat
+    user_mobile -- "WSS + HTTPS" --> chat
+    chat -- "JWT verify (JWKS)" --> auth0
+    chat -- "Push to offline users" --> fcm
+    chat -- "Email digest, mention" --> email
+    chat -- "Upload/serve media" --> s3
+    user_web -- "Direct media download" --> s3
+    user_mobile -- "Direct media download" --> s3
+
+    style chat fill:#1f77b4,color:#fff
+    style auth0 fill:#888,color:#fff
+    style fcm fill:#888,color:#fff
+    style email fill:#888,color:#fff
+    style s3 fill:#888,color:#fff
+```
+
+**Boundaries**:
+- KashFlow handles real-time chat + task collaboration
+- Auth0 owns identity; KashFlow only verifies JWT (not store passwords)
+- FCM/APNs deliver push notifications when user offline
+- S3 + CloudFront handle media (images, files) — không qua WS frame
+
+---
+
+### 7.2 C4 Level 2 — Container
+
+Bên trong KashFlow Chat System: các services + datastores.
+
+```mermaid
+flowchart TB
+    client["📱 Client<br/>(Web/Mobile)"]
+
+    subgraph aws["AWS VPC"]
+        lb["⚖️ Load Balancer<br/>(NLB for WS, ALB for REST)<br/>Consistent hash by user_id"]
+
+        subgraph ws_tier["WS Gateway Tier (30 nodes)"]
+            ws_node["WS Node<br/>35K conn/node<br/>Go + gorilla/websocket"]
+        end
+
+        subgraph rest_tier["REST API Tier (20 nodes)"]
+            rest_node["REST Node<br/>Go + chi/echo"]
+        end
+
+        subgraph workers["Background Workers"]
+            persist["Persist Worker<br/>(Kafka → DB)"]
+            push["Push Notification Worker<br/>(Kafka → FCM/APNs)"]
+        end
+
+        subgraph kafka_cluster["Kafka MSK (3 brokers)"]
+            t1["chat.messages"]
+            t2["chat.broadcasts"]
+            t3["chat.subscriptions"]
+            t4["chat.notifications"]
+        end
+
+        subgraph db_tier["PostgreSQL"]
+            pg_primary["Primary<br/>(writes)"]
+            pg_replica["Replicas × 2<br/>(reads)"]
+        end
+
+        redis["Redis Cluster<br/>(presence, rate-limit,<br/>idempotency, cache)"]
+    end
+
+    s3["S3 + CloudFront"]
+    fcm["FCM/APNs"]
+
+    client -- "WSS" --> lb
+    client -- "HTTPS" --> lb
+    client -- "Media GET/PUT" --> s3
+    lb -- "Sticky by user_id" --> ws_tier
+    lb -- "Round-robin" --> rest_tier
+
+    ws_node -- "Publish/Consume" --> kafka_cluster
+    rest_node -- "Publish events" --> kafka_cluster
+    rest_node -- "Read/Write" --> db_tier
+    rest_node -- "Cache, rate-limit" --> redis
+    ws_node -- "Presence, idempotency" --> redis
+
+    persist -- "Consume chat.messages" --> kafka_cluster
+    persist -- "Insert messages" --> pg_primary
+    push -- "Consume chat.notifications" --> kafka_cluster
+    push -- "Send push" --> fcm
+
+    pg_primary -.replicate.-> pg_replica
+
+    style ws_tier fill:#1f77b4,color:#fff
+    style rest_tier fill:#2ca02c,color:#fff
+    style kafka_cluster fill:#ff7f0e,color:#fff
+    style db_tier fill:#9467bd,color:#fff
+    style redis fill:#d62728,color:#fff
+```
+
+**Key flows shown**:
+- Client → LB → WS/REST tier (sticky session for WS)
+- WS tier publish/consume Kafka cho cross-node broadcast
+- Persist worker async write DB từ Kafka (off critical path — Step 4.1)
+- Push worker handle offline users
+- Redis shared cho rate-limit + idempotency + presence
+- Media direct client ↔ S3 (không qua WS)
+
+---
+
+### 7.3 C4 Level 3 — Component (bên trong WS Node)
+
+Components quan trọng trong 1 WS Gateway node.
+
+```mermaid
+flowchart TB
+    client_conn["TCP/TLS Connection"]
+
+    subgraph ws_node["WS Node Process (Go)"]
+        conn_mgr["Connection Manager<br/>(map: conn_id → Conn)<br/>~35K connections"]
+        auth_handler["Auth Handler<br/>(verify JWT, first-frame)"]
+        heartbeat["Heartbeat Manager<br/>(ping/pong, timeout)"]
+
+        sub_mgr["Subscription Manager<br/>local_subs: ch_id → [conn]<br/>global_subs: ch_id → [node]"]
+        tier_tracker["Tier Tracker<br/>conn_focus_state[conn]"]
+        buffer_mgr["Buffer Manager<br/>per-conn outbound queue<br/>(bounded, 1000 ev / 5MB)"]
+
+        msg_router["Message Router<br/>(C→S: validate, publish Kafka)"]
+        bcast_consumer["Broadcast Consumer<br/>(S→C: consume Kafka,<br/>fan-out to local conns)"]
+        sub_event_consumer["Subscription Event Consumer<br/>(sync global_subs from Kafka)"]
+        resync_handler["Resync Handler<br/>(HP3: live subscribe<br/>after reconnect)"]
+    end
+
+    kafka_in["Kafka:<br/>chat.broadcasts<br/>chat.subscriptions"]
+    kafka_out["Kafka:<br/>chat.messages<br/>chat.subscriptions"]
+    redis["Redis:<br/>presence, idempotency"]
+
+    client_conn --> conn_mgr
+    conn_mgr --> auth_handler
+    conn_mgr --> heartbeat
+    conn_mgr --> resync_handler
+    auth_handler --> sub_mgr
+    msg_router --> kafka_out
+    msg_router --> redis
+    msg_router -- "uses" --> conn_mgr
+
+    bcast_consumer <-- kafka_in
+    sub_event_consumer <-- kafka_in
+    sub_event_consumer --> sub_mgr
+    bcast_consumer --> sub_mgr
+    bcast_consumer --> tier_tracker
+    bcast_consumer --> buffer_mgr
+    buffer_mgr --> conn_mgr
+
+    style conn_mgr fill:#1f77b4,color:#fff
+    style sub_mgr fill:#1f77b4,color:#fff
+    style msg_router fill:#2ca02c,color:#fff
+    style bcast_consumer fill:#ff7f0e,color:#fff
+```
+
+**Component responsibilities**:
+
+| Component | Responsibility |
+|---|---|
+| Connection Manager | Maintain map `conn_id → *Conn`, handle WS lifecycle (open, close, error) |
+| Auth Handler | Process `connection.auth` first frame, verify JWT, attach user_id to Conn |
+| Heartbeat Manager | Send ping every 20s, detect disconnect via missed pongs |
+| Subscription Manager | Local: which conn subscribes which channel. Global: which nodes have subscribers (gossip qua Kafka) |
+| Tier Tracker | Per-connection focus state (HP2) — drives delivery decision |
+| Buffer Manager | Per-conn bounded outbound queue (HP4). Disconnect on threshold |
+| Message Router | C→S path: validate, dedup (Redis), publish Kafka |
+| Broadcast Consumer | S→C path: consume `chat.broadcasts`, look up local subs, apply tier filter, fan-out |
+| Subscription Event Consumer | Sync `global_subs` from Kafka — knows which nodes have subscribers cho mỗi channel |
+| Resync Handler | HP3: process cursor on reconnect, kick off live subscribe |
+
+---
+
+### 7.4 Sequence: Send Message (happy path, cross-node)
+
+User A on Node #1 sends message into channel X. Channel X has subscribers on Nodes #1, #7, #15.
+
+```mermaid
+sequenceDiagram
+    participant A as User A (on Node #1)
+    participant N1 as WS Node #1
+    participant K as Kafka
+    participant N7 as WS Node #7
+    participant N15 as WS Node #15
+    participant W as Persist Worker
+    participant DB as PostgreSQL
+    participant B as User B (on Node #7)
+    participant C as User C (on Node #15)
+
+    A->>N1: WS frame: message.send<br/>{client_msg_id, channel_X, content}
+    N1->>N1: Validate (auth, rate-limit)
+    N1->>N1: Check idempotency (Redis)<br/>via client_msg_id
+    N1->>N1: Generate server_msg_id +<br/>event_id (monotonic)
+    N1->>K: Publish chat.messages<br/>partition = hash(channel_X) % 100
+    N1->>A: WS frame: message.ack<br/>{client_msg_id, server_msg_id}
+
+    par Persist async
+        K->>W: Consume chat.messages
+        W->>DB: INSERT message row
+    and Cross-node broadcast
+        K->>N7: Consume chat.messages<br/>(N7 owns this partition)
+        N7->>N7: Look up global_subs[channel_X]<br/>→ [Node #1, #7, #15]
+        N7->>K: Publish chat.broadcasts<br/>{target_nodes: [#1, #7, #15], ...}
+
+        K->>N1: Consume (filter target=#1)
+        K->>N7: Consume (filter target=#7)
+        K->>N15: Consume (filter target=#15)
+
+        N7->>N7: Apply tier filter:<br/>active push, idle batch
+        N7->>B: WS frame: message.created
+        N15->>N15: Apply tier filter
+        N15->>C: WS frame: message.created
+    end
+```
+
+**Latency budget breakdown** (matches Step 2.2):
+- A → N1 frame parse + validate: ~5-10ms
+- N1 → Kafka publish: ~1-5ms
+- N1 → A ack: ~10-20ms (parallel with Kafka)
+- Kafka → N7 consume + lookup + republish: ~10-20ms
+- N7 → target nodes via Kafka: ~5-15ms
+- Target nodes → end users: ~10-20ms
+- **Total p50 (A → B receive)**: ~40-70ms ✓ within 100ms p50 budget
+
+---
+
+### 7.5 Sequence: Reconnect-Resync (HP3 dual-pump)
+
+Bob disconnects with cursor=102. Reconnects 30s later. Server has events 103-108 published in window.
+
+```mermaid
+sequenceDiagram
+    participant Bob as Bob (Client)
+    participant LB as Load Balancer
+    participant N as WS Node (any)
+    participant K as Kafka<br/>(chat.broadcasts)
+    participant API as REST API
+    participant DB as PostgreSQL
+
+    Note over Bob: Network restored<br/>cursor = 102
+
+    Bob->>LB: WS handshake (TLS resume)
+    LB->>N: Route by hash(user_id)
+    Bob->>N: connection.auth {JWT}
+    N->>N: Verify JWT
+    N->>Bob: connection.authenticated
+
+    Bob->>N: WS frame:<br/>{cursors: {channel_X: 102}}
+    N->>N: Validate cursor<br/>(within retention, signed)
+
+    par Live subscribe (immediate)
+        N->>N: Add Bob to local_subs<br/>for channel_X
+        Note over N: Live mode active.<br/>New events from K<br/>will reach Bob.
+        K->>N: event_id 109 arrives
+        N->>Bob: message.created (109)
+        Note over Bob: Buffer 109,<br/>không render yet
+    and REST gap fetch (parallel)
+        Bob->>API: GET /channels/X/messages<br/>?after=102&limit=100
+        API->>DB: SELECT WHERE event_id > 102<br/>LIMIT 100
+        DB->>API: [103, 104, 105, 106, 107, 108]
+        API->>Bob: {events: [103-108],<br/>next_cursor: 108, has_more: false}
+    end
+
+    Note over Bob: Merge + dedup by event_id<br/>[103,104,105,106,107,108,109]<br/>Sort, render in order
+    Bob->>Bob: Update cursor = 109
+    Note over Bob: Resume normal live mode
+```
+
+**Key invariants verified**:
+- ✅ No miss: events 103-108 fetched via REST
+- ✅ No duplicate: `seen_ids` set dedups (e.g., if 109 appeared in both buffers — won't happen here but mechanism in place)
+- ✅ Order: client sorts by `event_id` before render
+- ✅ Latency: live event 109 buffered immediately (~50ms), không phụ thuộc REST roundtrip (~100-300ms)
+
+---
+
+### 7.6 Sequence: Tier Transition (idle → active)
+
+Bob is online, viewing #engineering. Switches focus to #general (which has been idle, batch-buffered).
+
+```mermaid
+sequenceDiagram
+    participant Bob as Bob (Client)
+    participant N as WS Node
+    participant K as Kafka
+
+    Note over Bob,N: Initial: focused on #engineering<br/>conn_focus_state[Bob] = engineering
+
+    Note over N: Background:<br/>10 events arrive for #general<br/>via chat.broadcasts.<br/>Tier filter: idle for Bob<br/>→ batch into pending_batch[Bob][general]
+
+    Note over N: After 5s, batch sends:<br/>{channel: general, unread: 10,<br/>last_preview: "..."}
+    N->>Bob: notification.batch (count + preview)
+
+    Bob->>N: channel.focus_change<br/>{channel_id: general}
+    N->>N: Update conn_focus_state[Bob]<br/>= general
+    N->>N: Switch tier:<br/>engineering → idle<br/>general → active
+
+    N->>N: Check pending_batch[Bob][general]<br/>= 10 events buffered
+
+    alt Buffer < 10 events
+        N->>Bob: Push all events real-time
+    else Buffer >= 10 events
+        N->>N: Discard buffer<br/>(client will REST fetch)
+        Bob->>Bob: REST GET /channels/general/messages?after=last_seen
+    end
+
+    Note over Bob,N: From now on:<br/>#general events push real-time<br/>#engineering events batch
+```
+
+---
+
+### 7.7 Sequence: Slow Consumer Disconnect + Recover (HP4 + HP3)
+
+User Charlie has flaky network. Server detects buffer overflow → disconnect → Charlie reconnects → HP3 resync recovers.
+
+```mermaid
+sequenceDiagram
+    participant Char as Charlie (Slow)
+    participant N as WS Node
+    participant K as Kafka
+
+    Note over N: Channel #general busy.<br/>Server pushing to Charlie.
+
+    K->>N: event 200, 201, 202...
+    N->>N: trySend(200) → ok
+    N->>N: trySend(201) → ok
+    Note over Char,N: Charlie's network slow,<br/>WS buffer fills up
+
+    N->>N: trySend(500) → buffer full<br/>(>1000 events queued)
+    N->>N: Mark Charlie slow,<br/>increment slow_count
+
+    N->>N: write timeout 10s exceeded<br/>OR buffer_bytes > 5MB
+    N->>Char: WS Close (code 4408)<br/>"buffer_overflow"
+    N->>N: Free Charlie's connection state
+
+    Note over Char: Client detects close
+
+    Note over Char: Exponential backoff:<br/>wait 1s + jitter
+
+    Char->>N: WS reconnect<br/>{cursors: {general: 199}}
+    Note over Char,N: HP3 resync flow<br/>(see 7.5 sequence)
+    N->>Char: Replay events 200-N<br/>via dual-pump
+
+    Note over Char: Catch up complete.<br/>Resume normal mode.<br/>If slow recurs → disconnect again.
+```
+
+**Key behaviors**:
+- ✅ Slow user không block 199 others (per-conn buffer isolation)
+- ✅ Memory bounded (1000 events / 5 MB cap)
+- ✅ Recovery via HP3 (no new mechanism)
+- ✅ Cross-HP invariant preserved (no event drop, monotonic event_id intact)
+
+---
+
+### 7.8 Sequence: Subscription Update Propagation
+
+User Alice joins channel #marketing. Subscription state must propagate to all nodes (so messages routed correctly).
+
+```mermaid
+sequenceDiagram
+    participant Alice as Alice (Client)
+    participant N1 as WS Node #1<br/>(Alice's node)
+    participant K as Kafka<br/>(chat.subscriptions)
+    participant N5 as WS Node #5
+    participant N12 as WS Node #12
+
+    Alice->>N1: channel.subscribe<br/>{channel_id: marketing}
+    N1->>N1: Check ACL<br/>(Alice is member of #marketing?)
+    N1->>N1: Update local_subs[marketing]<br/>append Alice's conn
+
+    N1->>K: Publish event<br/>{type: subscribe,<br/>channel: marketing,<br/>node: #1}
+
+    par Fanout to all nodes
+        K->>N1: Consume own event
+        K->>N5: Consume
+        K->>N12: Consume
+        Note over N1,N12: All nodes update<br/>global_subs[marketing]<br/>add Node #1
+    end
+
+    Note over Alice,N12: From now: any message<br/>into #marketing routes<br/>to Node #1 (via global_subs)
+```
+
+**Eventual consistency note**: ~10-100ms window where Alice may miss messages published into channel right after subscribe (before global_subs propagated). Acceptable since user just subscribed — won't expect messages from past.
+
+---
+
+### 7.9 Final Review Checklist
+
+Verification trước khi T09 chốt + T10 bắt đầu code.
+
+#### Architecture coherence
+
+- [x] Pattern A hybrid (WS hot-path + REST CRUD) consistent across all events (Step 1.1)
+- [x] Naming convention applied (Step 1.4) — C→S imperative, S→C past-tense
+- [x] All decisions document có rationale (không "vì cảm thấy đúng")
+- [x] Cross-HP invariants preserved (HP4 không drop messages → HP3 cursor intact)
+
+#### Scale targets
+
+- [x] 1M concurrent achievable: 30 nodes × 35K conn (Step 2.5)
+- [x] 750K events/s broadcast achievable: Kafka 100 partitions, 30 consumers (Step 2.3)
+- [x] Latency p50 <100ms verified by breakdown (Step 7.4 sequence)
+- [x] Storage 28 TB/year với time partitioning (Step 2.6)
+
+#### Hard parts resolved
+
+- [x] HP1 routing: hybrid Kafka partitioned (Step 4.1)
+- [x] HP2 fan-out: tiered delivery, 96% reduction (Step 4.2)
+- [x] HP3 resync: client-tracked cursor + dual-pump (Step 4.3)
+- [x] HP4 backpressure: bounded buffer + disconnect (Step 4.4)
+
+#### Failure modes (all documented in Step 6)
+
+- [x] Single node death — Kafka rebalance, client reconnect
+- [x] Kafka outage — local pub/sub fallback for same-node delivery
+- [x] DB outage — DB off critical path, persist worker retry
+- [x] Redis outage — degrade gracefully (relax idempotency, presence stale)
+- [x] Network partition — multi-AZ resilience
+- [x] Hot channel storm — tiered delivery + rate limit
+- [x] Mass reconnect — exponential backoff + admission control
+- [x] Slow consumer — HP4 disconnect + HP3 recovery
+- [x] Malicious client — cursor cap, rate limit, signed tokens
+- [x] GC pause — buffer pooling, GOGC tuning
+
+#### Validation strategy (per Step 3.5)
+
+- [x] Each HP có test plan ở scale nhỏ (2-3 VPS)
+- [x] Invariants testable via induction (N=2, N=3 → confidence ở N=30)
+- [x] Risks accepted document (Step 3.6) cho things only verifiable in production
+
+#### Operational
+
+- [x] Monitoring requirements per failure mode (T52 input)
+- [x] Cost model exists (Step 2.4 bandwidth, deployment sizing earlier)
+- [x] Migration path từ test (3K) → production (1M) không đổi code (Step 3.4 invariants)
+- [x] Code-architecture invariants documented (Step 3.4) cho code reviewer
+
+#### Implementation handoff (T10 readiness)
+
+- [x] WS library chosen: gorilla/websocket (Step 5.1)
+- [x] Per-component responsibilities clear (Step 7.3 component diagram)
+- [x] Critical sequences documented (Step 7.4-7.8)
+- [x] Decision triggers documented (Step 5.9) — when to revisit
+- [ ] **Open**: API contract (event payload schemas) — sẽ ở T10 working doc
+- [ ] **Open**: Concrete tech choices for sub-components (e.g., specific Kafka client lib, specific JWT lib) — defer to T10 implementation
+
+---
+
+### 7.10 Tổng kết T09
+
+T09 design **hoàn tất**. Doc này là blueprint cho:
+
+1. **T10 (Implement WebSocket server + connection pool)** — components ở Step 7.3, sequences ở Step 7.4-7.8 là direct implementation guide
+2. **T11 (Kafka topic schema)** — Step 7.2 container diagram đã liệt kê 4 topics (`chat.messages`, `chat.broadcasts`, `chat.subscriptions`, `chat.notifications`); T11 sẽ chi tiết hóa partition count + retention + key strategy
+3. **T23 (Reconnect + heartbeat)** — Step 4.3 + Step 7.5 sequence là spec
+4. **T19/T40 (Presence)** — Step 4.2 tier definitions là foundation
+5. **T44/T45 (Load test)** — Step 3.5 validation strategy + Step 6 failure modes drive test scenarios
+6. **T52 (Monitoring)** — Step 6 failure detection signals drive metrics + alerts
+
+**Living document**: doc này không freeze. Khi load test (T45) phát hiện assumption sai, hoặc production observation requires revisit, **cập nhật doc** trước khi đổi code. "Doc out of sync với code" = drift, eventual rewrite.
+
+**Triggers re-review** (per Step 5.9):
+- Concurrent > 5M
+- Active fraction > 60%
+- Group avg size > 200
+- Storage > 100 TB
+- Performance load test (T45) reveals new bottleneck
