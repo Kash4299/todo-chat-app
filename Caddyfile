@@ -1,8 +1,12 @@
 # Caddy reverse proxy with automatic HTTPS.
-# DOMAIN and SERVER_PORT are injected from the environment by docker-compose.
+# DOMAIN is injected from the environment by docker-compose.
 #   - A real domain -> Caddy obtains & renews a Let's Encrypt certificate.
 #   - "localhost"   -> Caddy serves HTTPS via its local CA (no Let's Encrypt).
+#
+# Public traffic terminates here and is proxied to the Next.js UI. The UI's
+# server-side BFF talks to the Go backend (`app`) over the internal network,
+# so the backend itself is never exposed publicly.
 {$DOMAIN} {
 	encode gzip
-	reverse_proxy app:{$SERVER_PORT:8080}
+	reverse_proxy ui:3000
 }

@@ -1,17 +1,29 @@
 # Deploy — Milestone 1 (VPS · Docker Compose + Caddy)
 
-A self-hosted-identity + workspace API behind automatic HTTPS. No chat yet.
+Full stack: self-hosted identity + workspace, Next.js UI, behind automatic HTTPS.
+No chat yet.
 
 ## Topology
 - `caddy` — the only internet-facing service; terminates HTTPS on `:80`/`:443`,
-  reverse-proxies to `app` over the internal network.
+  reverse-proxies to the UI over the internal network.
+- `ui` — Next.js frontend (port 3000, internal). Its server-side BFF calls the
+  backend over the internal network — the browser never hits the backend directly.
 - `app` — Go API (HTTP), bound to `127.0.0.1` only (not internet-facing).
 - `postgres`, `redis` — bound to `127.0.0.1` only (never internet-facing).
 
+The single compose file lives in the **backend** repo and builds the UI from a
+**sibling** checkout (`build: ../todo-chat-app-ui`).
+
 ## Prerequisites
 - A VPS with Docker + Docker Compose.
+- **Both repos cloned side by side** on the host:
+  ```
+  git clone <backend> todo-chat-app
+  git clone <ui>      todo-chat-app-ui
+  ```
+  Run all compose commands from inside `todo-chat-app/`.
 - A domain with an `A` record → the VPS public IP.
-  (No domain yet? Use a free one from DuckDNS and set `DOMAIN` to it.)
+  (No domain yet? See the next section — use nip.io or DuckDNS.)
 
 ## No domain yet? (deploy with just the server IP)
 Let's Encrypt does **not** issue certificates for bare IPs. Easiest fix — use a
@@ -51,15 +63,22 @@ magic-DNS hostname that maps to your IP, so Caddy still gets real HTTPS:
    ```
 5. **Verify** (Caddy may take ~30s to issue the certificate on first run):
    ```bash
-   curl https://app.example.com/healthz   # {"status":"ok"}
-   curl https://app.example.com/readyz    # {"status":"ready"} once Postgres is up
+   # Public: the UI loads (login page). The backend is NOT publicly routed —
+   # the UI's BFF reaches it internally, so there is no public /healthz.
+   curl -I https://app.example.com            # 200 from the Next.js UI
+   # Backend health, checked from inside the network:
+   docker compose exec app wget -qO- http://127.0.0.1:8080/readyz   # {"status":"ready"}
+   docker compose ps                          # all services Up / healthy
    ```
+   Then open `https://app.example.com` in a browser → register → login → create a workspace.
 
 ## Operating notes
 - **Email in `log` mode:** registration/verification links are printed in
   `docker compose logs app` — no SMTP needed for a demo.
-- **Logs:** `docker compose logs -f app` (or `caddy`).
+- **Logs:** `docker compose logs -f app` (or `ui`, `caddy`).
 - **DB access from your laptop:** SSH-tunnel to `127.0.0.1:5432` (it is not public).
 - **Migrations** run automatically on container start (`./migrate && ./main`).
-- **Local dev:** set `DOMAIN=localhost` (Caddy uses a local CA), or skip Caddy and
-  hit the app directly at `http://127.0.0.1:8080`.
+- **UI env** is wired in `docker-compose.yaml` (the BFF targets `app:8080`
+  internally); you only set the shared vars above in `.env`.
+- **Local dev:** set `DOMAIN=localhost` (Caddy uses a local CA). Or skip Caddy
+  entirely and run the UI with `npm run dev` against the app on `:8080`.

@@ -88,17 +88,32 @@ services:
     networks:
       - todo-network
 
+  ui:
+    # Next.js frontend. Cloned as a sibling repo on the host (see DEPLOY.md).
+    build: ../todo-chat-app-ui
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      - NODE_ENV=production
+      # Server-side BFF reaches the backend over the internal network — the
+      # Go backend is never exposed publicly. Read at runtime via dynamic
+      # process.env access, so these override the build-time defaults.
+      - NEXT_PUBLIC_API_URL=http://app:8080/api
+      - NEXT_PUBLIC_WS_URL=ws://app:8080/api/v1/ws
+    networks:
+      - todo-network
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
-      - app
+      - ui
     ports:
       - "80:80"
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:?DOMAIN is required (e.g. app.example.com; use localhost for local dev)}
-      - SERVER_PORT=${SERVER_PORT:-8080}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
