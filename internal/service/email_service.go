@@ -2,8 +2,10 @@ package service
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
+	"github.com/Kash4299/todo-chat-app/internal/config"
 	"github.com/Kash4299/todo-chat-app/pkg/email"
 )
 
@@ -21,15 +23,58 @@ type SMTPEmailService struct {
 	baseURL  string
 }
 
-func NewEmailService(cfg *email.SMTPConfig) IEmailService {
-	return &SMTPEmailService{
-		host:     cfg.Host,
-		port:     cfg.Port,
-		user:     cfg.User,
-		password: cfg.Password,
-		from:     cfg.From,
-		baseURL:  cfg.BaseURL,
+// NewEmailService selects an email transport based on EMAIL_TRANSPORT.
+//
+// "smtp" builds (and connection-checks) a real SMTP transport — email is a
+// critical dependency in that mode, so a misconfiguration fails startup.
+// "log" (the default) is a degradable transport, like Redis/Kafka: it writes
+// verification and invitation links to the application log instead of sending
+// mail, so the app boots and auth flows work without any SMTP server (dev / v0).
+func NewEmailService(cfg *config.Config) (IEmailService, error) {
+	transport := strings.ToLower(strings.TrimSpace(cfg.EmailTransport))
+	switch transport {
+	case "smtp":
+		smtpCfg, err := email.NewSMTPConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return &SMTPEmailService{
+			host:     smtpCfg.Host,
+			port:     smtpCfg.Port,
+			user:     smtpCfg.User,
+			password: smtpCfg.Password,
+			from:     smtpCfg.From,
+			baseURL:  smtpCfg.BaseURL,
+		}, nil
+	case "", "log":
+		log.Printf("WARNING: EMAIL_TRANSPORT=%q — verification/invitation links are written to logs, not emailed. Set EMAIL_TRANSPORT=smtp in production.", transport)
+		return &LogEmailService{baseURL: strings.TrimRight(strings.TrimSpace(cfg.AppBaseURL), "/")}, nil
+	default:
+		return nil, fmt.Errorf("invalid EMAIL_TRANSPORT %q (want \"smtp\" or \"log\")", transport)
 	}
+}
+
+// LogEmailService is a degradable email transport for development and the first
+// deploy: it logs the action link instead of sending an email.
+type LogEmailService struct {
+	baseURL string
+}
+
+func (s *LogEmailService) SendVerificationEmail(toEmail, rawToken string) error {
+	log.Printf("[email:log] verification link for %s -> %s", toEmail, s.link("/verify-email", rawToken))
+	return nil
+}
+
+func (s *LogEmailService) SendWorkspaceInvitationEmail(toEmail, rawToken string) error {
+	log.Printf("[email:log] workspace invitation link for %s -> %s", toEmail, s.link("/workspace/accept-invitation", rawToken))
+	return nil
+}
+
+func (s *LogEmailService) link(path, rawToken string) string {
+	if s.baseURL == "" {
+		return fmt.Sprintf("%s?token=%s", path, rawToken)
+	}
+	return fmt.Sprintf("%s%s?token=%s", s.baseURL, path, rawToken)
 }
 
 func (s *SMTPEmailService) SendVerificationEmail(toEmail, rawToken string) error {

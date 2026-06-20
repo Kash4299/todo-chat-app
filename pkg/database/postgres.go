@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"time"
@@ -32,4 +33,10 @@ func NewPostgresDB(cfg *config.Config) (*gorm.DB, error) {
 	log.Println("connected to PostgreSQL successfully")
 
 	return db, nil
+}
+
+// NewSQLDB exposes the underlying *sql.DB so infra-level consumers (e.g. the
+// readiness probe) can ping the database without depending on GORM.
+func NewSQLDB(db *gorm.DB) (*sql.DB, error) {
+	return db.DB()
 }

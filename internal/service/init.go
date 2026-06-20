@@ -7,6 +7,7 @@ import (
 var Module = fx.Options(
 	fx.Provide(NewUserService),
 	fx.Provide(NewEmailService),
+	fx.Provide(NewHealthService),
 	fx.Provide(NewLocalAuthService),
 	fx.Provide(NewTaskService),
 	fx.Provide(NewChatService),

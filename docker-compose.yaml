@@ -1,24 +1,50 @@
-version: '3.8'
-
 services:
   app:
     build: .
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
     environment:
-      - SERVER_PORT=8080
-      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=${SERVER_PORT:-8080}
+      - GIN_MODE=${GIN_MODE:-release}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USERNAME=postgres
-      - DB_PASSWORD=password
-      - DB_DATABASE=todo_chat_app
-      - DB_SSLMODE=disable
-      - AUTH0_DOMAIN=dev-todo-chat-app.us.auth0.com
-      # AUTH0_AUDIENCE: set to your API Identifier (Auth0 dashboard: APIs > your API > General > API Identifier)
-      - AUTH0_AUDIENCE=
+      - DB_USERNAME=${DB_USERNAME:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
+      - DB_DATABASE=${DB_DATABASE:-todo_chat_app}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
+      - DB_MAX_OPEN_CONNS=${DB_MAX_OPEN_CONNS:-50}
+      - DB_MAX_IDLE_CONNS=${DB_MAX_IDLE_CONNS:-10}
+      - DB_CONN_MAX_LIFETIME_SECONDS=${DB_CONN_MAX_LIFETIME_SECONDS:-1800}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - JWT_ACCESS_EXPIRY_MIN=${JWT_ACCESS_EXPIRY_MIN:-15}
+      - JWT_REFRESH_EXPIRY_DAY=${JWT_REFRESH_EXPIRY_DAY:-7}
+      - EMAIL_TRANSPORT=${EMAIL_TRANSPORT:-smtp}
+      - APP_BASE_URL=${APP_BASE_URL:?APP_BASE_URL is required}
+      - SMTP_HOST=${SMTP_HOST:?SMTP_HOST is required for production SMTP}
+      - SMTP_PORT=${SMTP_PORT:?SMTP_PORT is required for production SMTP}
+      - SMTP_USER=${SMTP_USER:?SMTP_USER is required for production SMTP}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:?SMTP_PASSWORD is required for production SMTP}
+      - SMTP_FROM=${SMTP_FROM:?SMTP_FROM is required for production SMTP}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      # Auth0 is being removed (T80); leaving these unset keeps the Auth0
+      # verification path disabled.
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${SERVER_PORT:-8080}/readyz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
     networks:
       - todo-network
     command: >
@@ -26,14 +52,33 @@ services:
 
   postgres:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=todo_chat_app
+      - POSTGRES_USER=${DB_USERNAME:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
+      - POSTGRES_DB=${DB_DATABASE:-todo_chat_app}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - todo-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - todo-network
 

@@ -7,6 +7,7 @@ import (
 
 type Config struct {
 	ServerPort string
+	GinMode    string
 
 	DBHost            string
 	DBPort            string
@@ -35,12 +36,13 @@ type Config struct {
 
 	AllowedOrigins string
 
-	SMTPHost     string
-	SMTPPort     string
-	SMTPUser     string
-	SMTPPassword string
-	SMTPFrom     string
-	AppBaseURL   string
+	EmailTransport string
+	SMTPHost       string
+	SMTPPort       string
+	SMTPUser       string
+	SMTPPassword   string
+	SMTPFrom       string
+	AppBaseURL     string
 }
 
 func NewConfig() *Config {
@@ -48,6 +50,7 @@ func NewConfig() *Config {
 
 	return &Config{
 		ServerPort: getEnv("SERVER_PORT", "8080"),
+		GinMode:    getEnv("GIN_MODE", "release"),
 
 		DBHost:            getEnv("DB_HOST", "localhost"),
 		DBPort:            getEnv("DB_PORT", "5432"),
@@ -76,12 +79,13 @@ func NewConfig() *Config {
 
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
 
-		SMTPHost:     getEnv("SMTP_HOST", ""),
-		SMTPPort:     getEnv("SMTP_PORT", ""),
-		SMTPUser:     getEnv("SMTP_USER", ""),
-		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
-		SMTPFrom:     getEnv("SMTP_FROM", ""),
-		AppBaseURL:   getEnv("APP_BASE_URL", ""),
+		EmailTransport: getEnv("EMAIL_TRANSPORT", "log"),
+		SMTPHost:       getEnv("SMTP_HOST", ""),
+		SMTPPort:       getEnv("SMTP_PORT", ""),
+		SMTPUser:       getEnv("SMTP_USER", ""),
+		SMTPPassword:   getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:       getEnv("SMTP_FROM", ""),
+		AppBaseURL:     getEnv("APP_BASE_URL", ""),
 	}
 }
 

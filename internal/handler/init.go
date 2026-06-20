@@ -7,6 +7,7 @@ import (
 var Module = fx.Options(
 	fx.Provide(NewUserHandler),
 	fx.Provide(NewLocalAuthHandler),
+	fx.Provide(NewHealthHandler),
 	fx.Provide(NewTaskHandler),
 	fx.Provide(NewChatHandler),
 	fx.Provide(NewWorkspaceHandler),

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kash4299/todo-chat-app/internal/config"
 	"github.com/Kash4299/todo-chat-app/internal/constants"
 	"github.com/Kash4299/todo-chat-app/internal/model"
 	"github.com/Kash4299/todo-chat-app/internal/service"
@@ -45,6 +46,7 @@ func TestAuthMiddleware_Auth0_LinkRequired_Returns409(t *testing.T) {
 	secret := "test-secret-32-chars-minimum!!!!"
 
 	mw := &AuthMiddleware{
+		auth0Enabled:   true,
 		userService:    &mockUserServiceForMW{syncErr: &service.LinkRequiredError{GoogleSub: "google-oauth2|xyz", Email: "alice@example.com"}},
 		issuer:         "https://issuer/",
 		audience:       "aud",
@@ -129,6 +131,54 @@ func buildLocalToken(t *testing.T, secret string, userID uuid.UUID, issuer strin
 	return signed
 }
 
+// ── Tests: NewAuthMiddleware (Auth0 optional — T80 step 1) ────────────────────
+
+func TestNewAuthMiddleware_Auth0Optional_NoConfig(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "test-secret-32-chars-minimum!!!!"}
+	mw, err := NewAuthMiddleware(cfg, &mockUserServiceForMW{})
+	if err != nil {
+		t.Fatalf("expected no error when Auth0 is unconfigured, got %v", err)
+	}
+	if mw == nil {
+		t.Fatal("expected a middleware instance")
+	}
+}
+
+func TestNewAuthMiddleware_RejectsHalfAuth0Config(t *testing.T) {
+	cfg := &config.Config{Auth0Domain: "my-tenant.us.auth0.com"} // audience missing
+	if _, err := NewAuthMiddleware(cfg, &mockUserServiceForMW{}); err == nil {
+		t.Fatal("expected error when only one of AUTH0_DOMAIN/AUTH0_AUDIENCE is set")
+	}
+}
+
+func TestAuthMiddleware_Auth0Disabled_RejectsKidToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	cfg := &config.Config{JWTSecret: "test-secret-32-chars-minimum!!!!"} // no Auth0
+	mw, err := NewAuthMiddleware(cfg, &mockUserServiceForMW{})
+	if err != nil {
+		t.Fatalf("new middleware: %v", err)
+	}
+
+	r := gin.New()
+	r.GET("/me", mw.Handle(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	token := buildTestToken(t, priv, "kid-1", "https://issuer/", "aud", map[string]any{"sub": "auth0|abc"})
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when Auth0 is disabled, got %d", w.Code)
+	}
+}
+
 // ── Tests: normalizeAuth0Domain ───────────────────────────────────────────────
 
 func TestNormalizeAuth0Domain(t *testing.T) {
@@ -205,8 +255,9 @@ func TestAuthMiddleware_BlocksWhenEmailNotVerified(t *testing.T) {
 	}
 
 	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{syncErr: constants.ErrUserEmailNotVerified},
-		issuer:      "https://issuer/",
+		auth0Enabled: true,
+		userService:  &mockUserServiceForMW{syncErr: constants.ErrUserEmailNotVerified},
+		issuer:       "https://issuer/",
 		audience:    "aud",
 		jwksByK:     map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},
 	}
@@ -240,8 +291,9 @@ func TestAuthMiddleware_Auth0_RejectsWrongIssuer(t *testing.T) {
 	}
 
 	mw := &AuthMiddleware{
-		userService: &mockUserServiceForMW{},
-		issuer:      "https://issuer/",
+		auth0Enabled: true,
+		userService:  &mockUserServiceForMW{},
+		issuer:       "https://issuer/",
 		audience:    "aud",
 		jwksByK:     map[string]*rsa.PublicKey{"kid-1": &priv.PublicKey},
 	}

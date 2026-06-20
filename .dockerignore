@@ -1,0 +1,29 @@
+# VCS
+.git
+.gitignore
+
+# Secrets / local env (never bake into image layers)
+.env
+.env.*
+!.env.example
+
+# Local build artifacts
+main
+migrate
+*.exe
+*.test
+*.out
+
+# Docs / non-build assets
+docs/
+improvements/
+README.md
+*.md
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# CI (not needed inside build context)
+.github/

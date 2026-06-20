@@ -32,32 +32,40 @@ type AuthMiddleware struct {
 	localJWTSecret string
 	httpClient     *http.Client
 
+	auth0Enabled bool
+
 	mu      sync.RWMutex
 	jwksByK map[string]*rsa.PublicKey
 }
 
 func NewAuthMiddleware(cfg *config.Config, userService service.IUserService) (*AuthMiddleware, error) {
-	if strings.TrimSpace(cfg.Auth0Domain) == "" {
-		return nil, fmt.Errorf("AUTH0_DOMAIN is required")
-	}
-	if strings.TrimSpace(cfg.Auth0Audience) == "" {
-		return nil, fmt.Errorf("AUTH0_AUDIENCE is required")
-	}
-
-	domain, err := normalizeAuth0Domain(cfg.Auth0Domain)
-	if err != nil {
-		return nil, err
-	}
-
-	return &AuthMiddleware{
+	m := &AuthMiddleware{
 		userService:    userService,
-		issuer:         "https://" + domain + "/",
-		audience:       cfg.Auth0Audience,
-		jwksURL:        "https://" + domain + "/.well-known/jwks.json",
 		localJWTSecret: cfg.JWTSecret,
 		httpClient:     &http.Client{Timeout: 5 * time.Second},
 		jwksByK:        make(map[string]*rsa.PublicKey),
-	}, nil
+	}
+
+	// Auth0 is being removed (T80). It is now optional: the Auth0 verification
+	// path is enabled only when its config is fully present. Without it, the
+	// middleware trusts only locally-issued HS256 tokens (iss == LocalIssuer).
+	domainSet := strings.TrimSpace(cfg.Auth0Domain) != ""
+	audienceSet := strings.TrimSpace(cfg.Auth0Audience) != ""
+	if domainSet != audienceSet {
+		return nil, fmt.Errorf("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set together")
+	}
+	if domainSet {
+		domain, err := normalizeAuth0Domain(cfg.Auth0Domain)
+		if err != nil {
+			return nil, err
+		}
+		m.auth0Enabled = true
+		m.issuer = "https://" + domain + "/"
+		m.audience = cfg.Auth0Audience
+		m.jwksURL = "https://" + domain + "/.well-known/jwks.json"
+	}
+
+	return m, nil
 }
 
 func (m *AuthMiddleware) Handle() gin.HandlerFunc {
@@ -176,6 +184,9 @@ func (m *AuthMiddleware) keyFunc(token *jwt.Token) (any, error) {
 	kid, _ := token.Header["kid"].(string)
 
 	if kid != "" {
+		if !m.auth0Enabled {
+			return nil, fmt.Errorf("auth0 verification disabled")
+		}
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("expected RS256 for Auth0 token")
 		}

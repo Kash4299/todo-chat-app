@@ -18,12 +18,17 @@ func SetupRoutes(
 	chatHandler *handler.ChatHandler,
 	workspaceHandler *handler.WorkspaceHandler,
 	workspaceInvitationHandler *handler.WorkspaceInvitationHandler,
+	healthHandler *handler.HealthHandler,
 	authMiddleware *middleware.AuthMiddleware,
 	rbacMiddleware *middleware.RBACMiddleware,
 ) {
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{"message": "pong"})
 	})
+
+	// Liveness & readiness probes — public, at root, no auth or body limit.
+	r.GET("/healthz", healthHandler.Healthz)
+	r.GET("/readyz", healthHandler.Readyz)
 
 	api := r.Group("/api/v1")
 	api.Use(middleware.MaxBodySize(1 << 20))
