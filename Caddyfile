@@ -1,0 +1,8 @@
+# Caddy reverse proxy with automatic HTTPS.
+# DOMAIN and SERVER_PORT are injected from the environment by docker-compose.
+#   - A real domain -> Caddy obtains & renews a Let's Encrypt certificate.
+#   - "localhost"   -> Caddy serves HTTPS via its local CA (no Let's Encrypt).
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:{$SERVER_PORT:8080}
+}

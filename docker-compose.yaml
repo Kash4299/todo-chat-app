@@ -2,8 +2,10 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Loopback only — public traffic enters through Caddy (TLS) on 80/443.
+    # Local dev can still reach the app directly at http://127.0.0.1:8080.
     ports:
-      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
+      - "127.0.0.1:${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
     environment:
       - SERVER_PORT=${SERVER_PORT:-8080}
       - GIN_MODE=${GIN_MODE:-release}
@@ -57,8 +59,11 @@ services:
       - POSTGRES_USER=${DB_USERNAME:-postgres}
       - POSTGRES_PASSWORD=${DB_PASSWORD:?DB_PASSWORD is required}
       - POSTGRES_DB=${DB_DATABASE:-todo_chat_app}
+    # Loopback only: reachable from the host (SSH tunnel / local psql) but never
+    # from the internet. Docker would otherwise publish to 0.0.0.0 and bypass
+    # ufw. The app reaches Postgres internally via the todo-network DNS name.
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -72,8 +77,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Loopback only — Redis has no auth by default; must never face the internet.
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -82,8 +88,28 @@ services:
     networks:
       - todo-network
 
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?DOMAIN is required (e.g. app.example.com; use localhost for local dev)}
+      - SERVER_PORT=${SERVER_PORT:-8080}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - todo-network
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   todo-network:
